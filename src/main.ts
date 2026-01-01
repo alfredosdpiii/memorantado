@@ -31,7 +31,6 @@ async function main(): Promise<void> {
   await app.register(fastifyStatic, {
     root: WEB_DIST,
     prefix: "/",
-    decorateReply: false,
   });
 
   app.setNotFoundHandler(async (req, reply) => {
