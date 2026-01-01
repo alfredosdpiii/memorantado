@@ -12,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.MEMORANTADO_PORT ?? 3789);
 const HOST = "127.0.0.1";
-const WEB_DIST = path.resolve(__dirname, "../dist/web");
+const WEB_DIST = path.resolve(__dirname, "web");
 
 async function main(): Promise<void> {
   const app = Fastify({
