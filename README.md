@@ -11,18 +11,27 @@ Persistent memory storage for AI agents via [Model Context Protocol (MCP)](https
 - **Web Dashboard**: Svelte 5 UI for browsing, searching, and editing
 - **Local-Only Security**: Binds to 127.0.0.1 with host/origin validation
 
-## Quick Start
+## Installation
+
+### From npm (recommended)
 
 ```bash
-# Install dependencies
-npm install
+# Global install
+npm install -g memorantado
+memorantado
 
-# Build and run
+# Or run directly with npx
+npx memorantado
+```
+
+### From source
+
+```bash
+git clone https://github.com/alfredosdpiii/memorantado.git
+cd memorantado
+npm install
 npm run build
 npm start
-
-# Or development mode with hot reload
-npm run dev
 ```
 
 Server runs at `http://127.0.0.1:3789`

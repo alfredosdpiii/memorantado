@@ -4,6 +4,33 @@
   "description": "MCP server for persistent memory storage with SQLite backend and Svelte web UI",
   "type": "module",
   "main": "dist/main.js",
+  "bin": {
+    "memorantado": "bin/memorantado.js"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "memory",
+    "knowledge-graph",
+    "sqlite",
+    "ai",
+    "claude",
+    "anthropic"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alfredosdpiii/memorantado.git"
+  },
+  "homepage": "https://github.com/alfredosdpiii/memorantado#readme",
+  "bugs": {
+    "url": "https://github.com/alfredosdpiii/memorantado/issues"
+  },
+  "author": "alfredosdpiii",
+  "license": "MIT",
   "scripts": {
     "dev": "npm run build:web && tsx watch src/main.ts",
     "dev:web": "vite --config web/vite.config.ts",
@@ -11,7 +38,8 @@
     "build:web": "vite build --config web/vite.config.ts",
     "copy:schema": "cp src/db/schema.sql dist/db/schema.sql",
     "start": "node dist/main.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@fastify/static": "^8.0.0",
