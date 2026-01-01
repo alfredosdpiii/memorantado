@@ -17,7 +17,7 @@ export function createMcpServer(
 
   const server = new McpServer({
     name: "memorantado",
-    version: "0.1.1",
+    version: "0.1.2",
   });
 
   server.tool(
