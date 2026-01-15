@@ -8,25 +8,35 @@ import { InMemoryEventStore } from "./eventStore.js";
 
 type RegisterMcpRoutesOpts = {
   db: Database.Database;
-  maxSessions?: number;
   defaultProject?: string;
 };
+
+type SessionEntry = {
+  transport: StreamableHTTPServerTransport;
+  lastActivity: number;
+};
+
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const CLEANUP_INTERVAL_MS = 60 * 1000; // 1 minute
 
 export function registerMcpRoutes(
   app: FastifyInstance,
   opts: RegisterMcpRoutesOpts
 ): void {
-  const maxSessions = opts.maxSessions ?? 3;
   const globalDefaultProject = opts.defaultProject;
-  const transports = new Map<string, StreamableHTTPServerTransport>();
+  const sessions = new Map<string, SessionEntry>();
 
-  function evictIfNeeded(): void {
-    if (transports.size >= maxSessions) {
-      const err = new Error("Too many MCP sessions") as Error & { statusCode: number };
-      err.statusCode = 429;
-      throw err;
+  // Periodic cleanup of stale sessions
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [sid, entry] of sessions) {
+      if (now - entry.lastActivity > SESSION_TTL_MS) {
+        entry.transport.close().catch(() => {});
+        sessions.delete(sid);
+      }
     }
-  }
+  }, CLEANUP_INTERVAL_MS);
+  cleanupInterval.unref(); // Don't keep process alive just for cleanup
 
   app.post("/mcp", async (req, reply) => {
     const body = req.body as unknown;
@@ -36,8 +46,8 @@ export function registerMcpRoutes(
       let transport: StreamableHTTPServerTransport | undefined;
 
       if (sessionId) {
-        transport = transports.get(sessionId);
-        if (!transport) {
+        const entry = sessions.get(sessionId);
+        if (!entry) {
           reply.code(400);
           return {
             jsonrpc: "2.0",
@@ -45,6 +55,9 @@ export function registerMcpRoutes(
             id: null,
           };
         }
+
+        transport = entry.transport;
+        entry.lastActivity = Date.now();
 
         reply.hijack();
         await transport.handleRequest(req.raw, reply.raw, body);
@@ -63,8 +76,6 @@ export function registerMcpRoutes(
         };
       }
 
-      evictIfNeeded();
-
       const eventStore = new InMemoryEventStore({
         ttlMs: 15 * 60 * 1000,
         maxEventsPerStream: 5000,
@@ -74,13 +85,13 @@ export function registerMcpRoutes(
         sessionIdGenerator: () => randomUUID(),
         eventStore,
         onsessioninitialized: (sid) => {
-          transports.set(sid, transport!);
+          sessions.set(sid, { transport: transport!, lastActivity: Date.now() });
         },
       });
 
       transport.onclose = () => {
         const sid = transport!.sessionId;
-        if (sid) transports.delete(sid);
+        if (sid) sessions.delete(sid);
       };
 
       const urlProject = (req.query as { project?: string }).project;
@@ -104,14 +115,15 @@ export function registerMcpRoutes(
       return;
     }
 
-    const transport = transports.get(sessionId);
-    if (!transport) {
+    const entry = sessions.get(sessionId);
+    if (!entry) {
       reply.code(400).send("Invalid or missing mcp-session-id");
       return;
     }
 
+    entry.lastActivity = Date.now();
     reply.hijack();
-    await transport.handleRequest(req.raw, reply.raw);
+    await entry.transport.handleRequest(req.raw, reply.raw);
   });
 
   app.delete("/mcp", async (req, reply) => {
@@ -121,24 +133,25 @@ export function registerMcpRoutes(
       return;
     }
 
-    const transport = transports.get(sessionId);
-    if (!transport) {
+    const entry = sessions.get(sessionId);
+    if (!entry) {
       reply.code(400).send("Invalid or missing mcp-session-id");
       return;
     }
 
     reply.hijack();
-    await transport.handleRequest(req.raw, reply.raw);
+    await entry.transport.handleRequest(req.raw, reply.raw);
   });
 
   app.addHook("onClose", async () => {
-    for (const t of transports.values()) {
+    clearInterval(cleanupInterval);
+    for (const entry of sessions.values()) {
       try {
-        await t.close();
+        await entry.transport.close();
       } catch {
         // ignore
       }
     }
-    transports.clear();
+    sessions.clear();
   });
 }

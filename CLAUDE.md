@@ -30,7 +30,7 @@ memorantado is an MCP (Model Context Protocol) server for persistent memory stor
 ### Server Stack
 
 - **Fastify** serves everything on port 3789 (configurable via `MEMORANTADO_PORT`)
-- `/mcp` - MCP protocol endpoint using StreamableHTTPServerTransport, session-based with max 3 concurrent sessions
+- `/mcp` - MCP protocol endpoint using StreamableHTTPServerTransport, supports unlimited concurrent sessions
 - `/api/*` - REST API for the web UI (`src/api/routes.ts`)
 - Static files served from `dist/web` with SPA fallback
 
