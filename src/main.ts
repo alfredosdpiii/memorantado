@@ -2,10 +2,12 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDb } from "./db/db.js";
 import { migrate } from "./db/migrate.js";
 import { installSecurity } from "./security.js";
 import { registerMcpRoutes } from "./mcp/http.js";
+import { createMcpServer } from "./mcp/server.js";
 import { registerApiRoutes } from "./api/routes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,8 +15,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORANTADO_PORT ?? 3789);
 const HOST = "127.0.0.1";
 const WEB_DIST = path.resolve(__dirname, "web");
+const STDIO_MODE = process.argv.includes("--stdio");
 
-async function main(): Promise<void> {
+async function runStdioMode(): Promise<void> {
+  const db = openDb();
+  migrate(db);
+
+  const server = createMcpServer(db, {});
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+async function runHttpMode(): Promise<void> {
   const app = Fastify({
     logger: true,
     bodyLimit: 5 * 1024 * 1024,
@@ -43,6 +55,14 @@ async function main(): Promise<void> {
 
   await app.listen({ port: PORT, host: HOST });
   console.log(`memorantado running at http://${HOST}:${PORT}`);
+}
+
+async function main(): Promise<void> {
+  if (STDIO_MODE) {
+    await runStdioMode();
+  } else {
+    await runHttpMode();
+  }
 }
 
 main().catch((err) => {

@@ -2,7 +2,7 @@
   "mcpServers": {
     "memorantado": {
       "type": "http",
-      "url": "http://localhost:3789/mcp?project=memorantado"
+      "url": "http://localhost:3789/mcp"
     }
   }
 }
