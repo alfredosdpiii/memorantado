@@ -38,7 +38,44 @@ Server runs at `http://127.0.0.1:3789`
 
 ## MCP Configuration
 
+### Stdio (recommended)
+
 Add to your MCP client configuration (e.g., Claude Desktop, Cursor, etc.):
+
+```json
+{
+  "mcpServers": {
+    "memorantado": {
+      "command": "npx",
+      "args": ["memorantado", "--stdio"]
+    }
+  }
+}
+```
+
+For project-specific memory, set the `MEMORANTADO_PROJECT` environment variable:
+
+```json
+{
+  "mcpServers": {
+    "memorantado": {
+      "command": "npx",
+      "args": ["memorantado", "--stdio"],
+      "env": {
+        "MEMORANTADO_PROJECT": "my-project"
+      }
+    }
+  }
+}
+```
+
+### HTTP
+
+Alternatively, run the server and connect over HTTP:
+
+```bash
+npx memorantado
+```
 
 ```json
 {
@@ -51,7 +88,7 @@ Add to your MCP client configuration (e.g., Claude Desktop, Cursor, etc.):
 }
 ```
 
-For project-specific memory:
+For project-specific memory via HTTP:
 
 ```json
 {
