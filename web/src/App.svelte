@@ -4,6 +4,7 @@
   import Search from "./routes/Search.svelte";
   import Entity from "./routes/Entity.svelte";
   import MemoryItems from "./routes/MemoryItems.svelte";
+  import HybridMemory from "./routes/HybridMemory.svelte";
   import Graph from "./routes/Graph.svelte";
 
   let route = $state(window.location.hash || "#/");
@@ -64,6 +65,14 @@
       navigate("#/memory");
     }}>Memory</a
   >
+  <a
+    href="#/hybrid"
+    class:active={isActive("#/hybrid")}
+    onclick={(e) => {
+      e.preventDefault();
+      navigate("#/hybrid");
+    }}>Hybrid</a
+  >
 
   <div class="project-select">
     <label for="project-select">Project:</label>
@@ -84,6 +93,8 @@
     <Entity {project} name={decodeURIComponent(route.slice(9))} />
   {:else if route.startsWith("#/memory")}
     <MemoryItems {project} />
+  {:else if route.startsWith("#/hybrid")}
+    <HybridMemory {project} />
   {:else}
     <div class="empty">Page not found</div>
   {/if}

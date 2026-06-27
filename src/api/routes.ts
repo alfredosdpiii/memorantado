@@ -4,6 +4,7 @@ import { resolveProject } from "../mcp/project.js";
 import { isFeatureEnabled } from "../featureFlags.js";
 import type { HttpMetrics } from "../observability.js";
 import * as graph from "../db/graph.js";
+import * as hybrid from "../db/hybridMemory.js";
 import * as timeline from "../db/timeline.js";
 
 type RegisterApiRoutesOpts = {
@@ -221,5 +222,137 @@ export function registerApiRoutes(
     const id = parseInt(req.params.id, 10);
     const deleted = timeline.deleteMemoryItem(db, project, id);
     return { deleted };
+  });
+
+  app.get<{
+    Querystring: { project?: string; session?: string; limit?: string; offset?: string };
+  }>("/api/episodes", async (req) => {
+    const project = resolveProject(req.query.project);
+    return hybrid.listEpisodes(db, project, {
+      session: req.query.session,
+      limit: req.query.limit ? parseInt(req.query.limit, 10) : 50,
+      offset: req.query.offset ? parseInt(req.query.offset, 10) : 0,
+    });
+  });
+
+  app.post<{
+    Body: {
+      project?: string;
+      session?: string;
+      actor?: string;
+      role?: string;
+      content: string;
+      source?: string;
+      metadata?: Record<string, unknown>;
+      extract?: boolean;
+    };
+  }>("/api/episodes", async (req) => {
+    const project = resolveProject(req.body.project);
+    const episode = hybrid.appendEpisode(db, project, {
+      session: req.body.session,
+      actor: req.body.actor,
+      role: req.body.role,
+      content: req.body.content,
+      source: req.body.source,
+      metadata: req.body.metadata,
+    });
+    const memories = req.body.extract
+      ? await hybrid.extractMemories(db, project, episode.id)
+      : [];
+    return { episode, memories };
+  });
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { project?: string };
+  }>("/api/episodes/:id", async (req, reply) => {
+    const project = resolveProject(req.query.project);
+    const episode = hybrid.getEpisode(db, project, parseInt(req.params.id, 10));
+    if (!episode) {
+      reply.code(404);
+      return { error: "not_found" };
+    }
+    return episode;
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: { project?: string };
+  }>("/api/episodes/:id/extract", async (req) => {
+    const project = resolveProject(req.body.project);
+    return {
+      memories: await hybrid.extractMemories(db, project, parseInt(req.params.id, 10)),
+    };
+  });
+
+  app.get<{
+    Querystring: { project?: string; status?: string; limit?: string; offset?: string };
+  }>("/api/semantic-memories", async (req) => {
+    const project = resolveProject(req.query.project);
+    return hybrid.listSemanticMemories(db, project, {
+      status: req.query.status,
+      limit: req.query.limit ? parseInt(req.query.limit, 10) : 100,
+      offset: req.query.offset ? parseInt(req.query.offset, 10) : 0,
+    });
+  });
+
+  app.post<{
+    Body: Parameters<typeof hybrid.upsertSemanticMemory>[2] & {
+      project?: string;
+      sourceEpisodeId?: number;
+    };
+  }>("/api/semantic-memories", async (req) => {
+    const project = resolveProject(req.body.project);
+    return hybrid.upsertSemanticMemory(db, project, req.body, req.body.sourceEpisodeId);
+  });
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { project?: string };
+  }>("/api/semantic-memories/:id/explain", async (req) => {
+    const project = resolveProject(req.query.project);
+    return hybrid.explainMemory(db, project, parseInt(req.params.id, 10));
+  });
+
+  app.post<{
+    Body: { project?: string; query: string; limit?: number; tokenBudget?: number };
+  }>("/api/retrieve-context", async (req) => {
+    const project = resolveProject(req.body.project);
+    return hybrid.retrieveContext(db, project, req.body.query, {
+      limit: req.body.limit,
+      tokenBudget: req.body.tokenBudget,
+    });
+  });
+
+  app.get<{
+    Querystring: { project?: string; status?: string };
+  }>("/api/memory-conflicts", async (req) => {
+    const project = resolveProject(req.query.project);
+    return hybrid.listConflicts(db, project, req.query.status ?? "open");
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: {
+      project?: string;
+      resolvedMemoryId?: number;
+      status?: "resolved" | "ignored";
+    };
+  }>("/api/memory-conflicts/:id/resolve", async (req) => {
+    const project = resolveProject(req.body.project);
+    return hybrid.resolveConflict(
+      db,
+      project,
+      parseInt(req.params.id, 10),
+      req.body.resolvedMemoryId,
+      req.body.status ?? "resolved"
+    );
+  });
+
+  app.post<{
+    Body: { project?: string };
+  }>("/api/memory-benchmark", async (req) => {
+    const project = resolveProject(req.body.project);
+    return hybrid.runMemoryBenchmark(db, project);
   });
 }

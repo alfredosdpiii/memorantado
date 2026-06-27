@@ -3,6 +3,7 @@ import { z } from "zod";
 import type Database from "better-sqlite3";
 import { resolveProject } from "./project.js";
 import * as graph from "../db/graph.js";
+import * as hybrid from "../db/hybridMemory.js";
 import * as timeline from "../db/timeline.js";
 
 type CreateMcpServerOpts = {
@@ -233,6 +234,192 @@ export function createMcpServer(
       const project = resolveProject(input.project, defaultProject);
       const deleted = timeline.deleteMemoryItem(db, project, input.id);
       return { content: [{ type: "text", text: deleted ? "Deleted" : "Not found" }] };
+    }
+  );
+
+  server.tool(
+    "append_episode",
+    {
+      project: z.string().optional(),
+      session: z.string().optional(),
+      actor: z.string().optional(),
+      role: z.string().optional(),
+      content: z.string().min(1),
+      source: z.string().optional(),
+      metadata: z.record(z.unknown()).optional(),
+      extract: z.boolean().default(true),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const episode = hybrid.appendEpisode(db, project, {
+        session: input.session,
+        actor: input.actor,
+        role: input.role,
+        content: input.content,
+        source: input.source,
+        metadata: input.metadata,
+      });
+      const memories = input.extract
+        ? await hybrid.extractMemories(db, project, episode.id)
+        : [];
+      return {
+        content: [{ type: "text", text: JSON.stringify({ episode, memories }, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    "extract_episode_memories",
+    {
+      project: z.string().optional(),
+      episodeId: z.number().int().positive(),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = await hybrid.extractMemories(db, project, input.episodeId);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "retrieve_memory_context",
+    {
+      project: z.string().optional(),
+      query: z.string().min(1),
+      limit: z.number().int().positive().max(50).optional(),
+      tokenBudget: z.number().int().positive().max(12000).optional(),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = hybrid.retrieveContext(db, project, input.query, {
+        limit: input.limit,
+        tokenBudget: input.tokenBudget,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "list_episodes",
+    {
+      project: z.string().optional(),
+      session: z.string().optional(),
+      limit: z.number().int().positive().max(200).optional(),
+      offset: z.number().int().nonnegative().optional(),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = hybrid.listEpisodes(db, project, {
+        session: input.session,
+        limit: input.limit,
+        offset: input.offset,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "list_semantic_memories",
+    {
+      project: z.string().optional(),
+      status: z.enum(["active", "superseded", "invalidated"]).optional(),
+      limit: z.number().int().positive().max(200).optional(),
+      offset: z.number().int().nonnegative().optional(),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = hybrid.listSemanticMemories(db, project, {
+        status: input.status,
+        limit: input.limit,
+        offset: input.offset,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "upsert_semantic_memory",
+    {
+      project: z.string().optional(),
+      scope: z.enum(["user", "agent", "session", "project", "global"]).optional(),
+      kind: z.string().optional(),
+      subject: z.string().min(1),
+      predicate: z.string().optional(),
+      object: z.string().optional(),
+      content: z.string().min(1),
+      confidence: z.number().min(0).max(1).optional(),
+      importance: z.number().min(0).max(1).optional(),
+      sourceEpisodeId: z.number().int().positive().optional(),
+      metadata: z.record(z.unknown()).optional(),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = hybrid.upsertSemanticMemory(
+        db,
+        project,
+        input,
+        input.sourceEpisodeId
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "explain_semantic_memory",
+    {
+      project: z.string().optional(),
+      memoryId: z.number().int().positive(),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = hybrid.explainMemory(db, project, input.memoryId);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "list_memory_conflicts",
+    {
+      project: z.string().optional(),
+      status: z.enum(["open", "resolved", "ignored"]).default("open"),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = hybrid.listConflicts(db, project, input.status);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "resolve_memory_conflict",
+    {
+      project: z.string().optional(),
+      conflictId: z.number().int().positive(),
+      resolvedMemoryId: z.number().int().positive().optional(),
+      status: z.enum(["resolved", "ignored"]).default("resolved"),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = hybrid.resolveConflict(
+        db,
+        project,
+        input.conflictId,
+        input.resolvedMemoryId,
+        input.status
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "run_memory_benchmark",
+    {
+      project: z.string().optional(),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = await hybrid.runMemoryBenchmark(db, project);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
 

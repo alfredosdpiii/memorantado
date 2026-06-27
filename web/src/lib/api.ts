@@ -28,6 +28,52 @@ export type EntityDetail = GraphEntity & {
   relations: GraphRelation[];
 };
 
+export type Episode = {
+  id: number;
+  project: string;
+  session: string | null;
+  actor: string | null;
+  role: string;
+  content: string;
+  source: string | null;
+  createdAt: string;
+};
+
+export type SemanticMemory = {
+  id: number;
+  project: string;
+  scope: string;
+  kind: string;
+  subject: string;
+  predicate: string;
+  object: string | null;
+  content: string;
+  confidence: number;
+  importance: number;
+  status: string;
+  updatedAt: string;
+};
+
+export type MemoryConflict = {
+  id: number;
+  memoryId: number;
+  conflictingId: number;
+  reason: string;
+  resolutionStatus: string;
+  createdAt: string;
+};
+
+export type ContextPack = {
+  query: string;
+  intent: string;
+  memories: Array<{ id: number; score: number; memory?: SemanticMemory }>;
+  episodes: Array<{ id: number; score: number; episode?: Episode }>;
+  conflicts: MemoryConflict[];
+  context: string;
+  estimatedTokens: number;
+  latencyMs: number;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
@@ -150,5 +196,72 @@ export async function createMemoryItem(
 export async function deleteMemoryItem(project: string, id: number): Promise<void> {
   await request(`/api/memory-items/${id}?project=${encodeURIComponent(project)}`, {
     method: "DELETE",
+  });
+}
+
+export async function getEpisodes(project: string): Promise<Episode[]> {
+  return request(`/api/episodes?project=${encodeURIComponent(project)}`);
+}
+
+export async function createEpisode(
+  project: string,
+  input: {
+    content: string;
+    actor?: string;
+    session?: string;
+    source?: string;
+    extract?: boolean;
+  }
+): Promise<{ episode: Episode; memories: SemanticMemory[] }> {
+  return request("/api/episodes", {
+    method: "POST",
+    body: JSON.stringify({ project, ...input }),
+  });
+}
+
+export async function getSemanticMemories(project: string): Promise<SemanticMemory[]> {
+  return request(`/api/semantic-memories?project=${encodeURIComponent(project)}`);
+}
+
+export async function createSemanticMemory(
+  project: string,
+  input: {
+    subject: string;
+    content: string;
+    kind?: string;
+    predicate?: string;
+    importance?: number;
+    confidence?: number;
+  }
+): Promise<SemanticMemory> {
+  return request("/api/semantic-memories", {
+    method: "POST",
+    body: JSON.stringify({ project, ...input }),
+  });
+}
+
+export async function retrieveContext(
+  project: string,
+  query: string
+): Promise<ContextPack> {
+  return request("/api/retrieve-context", {
+    method: "POST",
+    body: JSON.stringify({ project, query }),
+  });
+}
+
+export async function getMemoryConflicts(project: string): Promise<MemoryConflict[]> {
+  return request(`/api/memory-conflicts?project=${encodeURIComponent(project)}`);
+}
+
+export async function runMemoryBenchmark(project: string): Promise<{
+  id: number;
+  name: string;
+  metrics: Record<string, number>;
+  report: string;
+}> {
+  return request("/api/memory-benchmark", {
+    method: "POST",
+    body: JSON.stringify({ project }),
   });
 }

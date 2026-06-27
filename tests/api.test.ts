@@ -111,4 +111,40 @@ describe("API routes", () => {
     expect(metrics.statusCode).toBe(200);
     expect(metrics.body).toContain("memorantado_http_requests_total");
   });
+
+  it("serves hybrid memory episodes, retrieval, conflicts, and benchmark", async () => {
+    const created = await app.inject({
+      headers: HOST_HEADER,
+      method: "POST",
+      payload: {
+        actor: "Ada",
+        content: "Ada prefers SQLite for local agent memory.",
+        extract: true,
+        project: "api",
+      },
+      url: "/api/episodes",
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json<{ memories: unknown[] }>().memories).toHaveLength(1);
+
+    const retrieved = await app.inject({
+      headers: HOST_HEADER,
+      method: "POST",
+      payload: { project: "api", query: "What does Ada prefer?" },
+      url: "/api/retrieve-context",
+    });
+    expect(retrieved.statusCode).toBe(200);
+    expect(retrieved.json<{ context: string }>().context.toLowerCase()).toContain(
+      "sqlite"
+    );
+
+    const benchmark = await app.inject({
+      headers: HOST_HEADER,
+      method: "POST",
+      payload: { project: "api" },
+      url: "/api/memory-benchmark",
+    });
+    expect(benchmark.statusCode).toBe(200);
+    expect(benchmark.json<{ metrics: { accuracy: number } }>().metrics.accuracy).toBe(1);
+  });
 });

@@ -44,6 +44,8 @@
     "test:coverage": "vitest run --coverage",
     "deadcode": "knip",
     "duplicates": "jscpd",
+    "bench:memory": "tsx src/bench/memory.ts",
+    "bench:public-memory": "tsx src/bench/publicMemoryBenchmarks.ts",
     "size": "node scripts/check-bundle-size.mjs",
     "docs:openapi": "node scripts/generate-openapi.mjs",
     "docs:check": "node scripts/generate-openapi.mjs --check",

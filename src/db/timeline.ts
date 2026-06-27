@@ -231,6 +231,10 @@ export function getProjects(db: Database.Database): string[] {
     SELECT project FROM entities
     UNION
     SELECT project FROM memory_items
+    UNION
+    SELECT project FROM episodes
+    UNION
+    SELECT project FROM semantic_memories
     ORDER BY project
   `
     )

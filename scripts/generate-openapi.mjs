@@ -20,6 +20,17 @@ const operations = [
   ["post", "/api/memory-items", "Create a memory item"],
   ["get", "/api/memory-items/{id}", "Read a memory item"],
   ["delete", "/api/memory-items/{id}", "Delete a memory item"],
+  ["get", "/api/episodes", "List raw episodes"],
+  ["post", "/api/episodes", "Append an episode and optionally extract memories"],
+  ["get", "/api/episodes/{id}", "Read an episode"],
+  ["post", "/api/episodes/{id}/extract", "Extract semantic memories"],
+  ["get", "/api/semantic-memories", "List semantic memories"],
+  ["post", "/api/semantic-memories", "Create or reinforce a semantic memory"],
+  ["get", "/api/semantic-memories/{id}/explain", "Explain memory provenance"],
+  ["post", "/api/retrieve-context", "Retrieve a context pack"],
+  ["get", "/api/memory-conflicts", "List memory conflicts"],
+  ["post", "/api/memory-conflicts/{id}/resolve", "Resolve a memory conflict"],
+  ["post", "/api/memory-benchmark", "Run local memory benchmark"],
 ];
 
 function parametersFor(route) {
