@@ -1,0 +1,7 @@
+coverage/
+dist/
+node_modules/
+.claude/
+.pi/
+package-lock.json
+docs/openapi.json

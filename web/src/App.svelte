@@ -40,14 +40,35 @@
 
 <nav>
   <span class="brand">memorantado</span>
-  <a href="#/" class:active={route === "#/"} onclick={(e) => { e.preventDefault(); navigate("#/"); }}>Search</a>
-  <a href="#/graph" class:active={isActive("#/graph")} onclick={(e) => { e.preventDefault(); navigate("#/graph"); }}>Graph</a>
-  <a href="#/memory" class:active={isActive("#/memory")} onclick={(e) => { e.preventDefault(); navigate("#/memory"); }}>Memory</a>
+  <a
+    href="#/"
+    class:active={route === "#/"}
+    onclick={(e) => {
+      e.preventDefault();
+      navigate("#/");
+    }}>Search</a
+  >
+  <a
+    href="#/graph"
+    class:active={isActive("#/graph")}
+    onclick={(e) => {
+      e.preventDefault();
+      navigate("#/graph");
+    }}>Graph</a
+  >
+  <a
+    href="#/memory"
+    class:active={isActive("#/memory")}
+    onclick={(e) => {
+      e.preventDefault();
+      navigate("#/memory");
+    }}>Memory</a
+  >
 
   <div class="project-select">
     <label for="project-select">Project:</label>
     <select id="project-select" value={project} onchange={updateProject}>
-      {#each projects as p}
+      {#each projects as p (p)}
         <option value={p}>{p}</option>
       {/each}
     </select>

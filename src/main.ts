@@ -1,10 +1,17 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
+import type Database from "better-sqlite3";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDb } from "./db/db.js";
 import { migrate } from "./db/migrate.js";
+import {
+  createMetrics,
+  createRequestId,
+  installObservability,
+  type HttpMetrics,
+} from "./observability.js";
 import { installSecurity } from "./security.js";
 import { registerMcpRoutes } from "./mcp/http.js";
 import { createMcpServer } from "./mcp/server.js";
@@ -17,6 +24,15 @@ const HOST = "127.0.0.1";
 const WEB_DIST = path.resolve(__dirname, "web");
 const STDIO_MODE = process.argv.includes("--stdio");
 
+type CreateHttpAppOpts = {
+  db?: Database.Database;
+  logger?: boolean | Record<string, unknown>;
+  metrics?: HttpMetrics;
+  port?: number;
+  serveStatic?: boolean;
+  webDist?: string;
+};
+
 async function runStdioMode(): Promise<void> {
   const db = openDb();
   migrate(db);
@@ -26,24 +42,50 @@ async function runStdioMode(): Promise<void> {
   await server.connect(transport);
 }
 
-async function runHttpMode(): Promise<void> {
+export async function createHttpApp(
+  opts: CreateHttpAppOpts = {}
+): Promise<FastifyInstance> {
+  const port = opts.port ?? PORT;
+  const db = opts.db ?? openDb();
+  const metrics = opts.metrics ?? createMetrics();
   const app = Fastify({
-    logger: true,
     bodyLimit: 5 * 1024 * 1024,
+    genReqId: (req) => {
+      const id = req.headers["x-request-id"];
+      return typeof id === "string" && id.trim() ? id : createRequestId();
+    },
+    logger: opts.logger ?? {
+      level: process.env.LOG_LEVEL ?? "info",
+      redact: [
+        "req.headers.authorization",
+        "req.headers.cookie",
+        "req.headers.set-cookie",
+        "req.headers.x-api-key",
+        "res.headers.set-cookie",
+      ],
+    },
+    requestIdHeader: "x-request-id",
   });
 
-  const db = openDb();
   migrate(db);
 
-  installSecurity(app, { port: PORT });
+  if (!opts.db) {
+    app.addHook("onClose", async () => {
+      db.close();
+    });
+  }
 
+  installSecurity(app, { port });
+  installObservability(app, { metrics });
   registerMcpRoutes(app, { db });
-  registerApiRoutes(app, { db });
+  registerApiRoutes(app, { db, metrics });
 
-  await app.register(fastifyStatic, {
-    root: WEB_DIST,
-    prefix: "/",
-  });
+  if (opts.serveStatic !== false) {
+    await app.register(fastifyStatic, {
+      root: opts.webDist ?? WEB_DIST,
+      prefix: "/",
+    });
+  }
 
   app.setNotFoundHandler(async (req, reply) => {
     if (req.url.startsWith("/api/") || req.url.startsWith("/mcp")) {
@@ -53,11 +95,16 @@ async function runHttpMode(): Promise<void> {
     return reply.sendFile("index.html");
   });
 
+  return app;
+}
+
+async function runHttpMode(): Promise<void> {
+  const app = await createHttpApp();
   await app.listen({ port: PORT, host: HOST });
   console.log(`memorantado running at http://${HOST}:${PORT}`);
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   if (STDIO_MODE) {
     await runStdioMode();
   } else {
@@ -65,7 +112,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

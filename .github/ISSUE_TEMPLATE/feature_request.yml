@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an improvement
+title: "feat: "
+labels: ["type: feature", "priority: medium"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or agent problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the desired behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, screenshots, alternatives, or implementation notes.

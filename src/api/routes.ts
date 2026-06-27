@@ -1,18 +1,36 @@
 import type { FastifyInstance } from "fastify";
 import type Database from "better-sqlite3";
 import { resolveProject } from "../mcp/project.js";
+import { isFeatureEnabled } from "../featureFlags.js";
+import type { HttpMetrics } from "../observability.js";
 import * as graph from "../db/graph.js";
 import * as timeline from "../db/timeline.js";
 
 type RegisterApiRoutesOpts = {
   db: Database.Database;
+  metrics: HttpMetrics;
 };
 
 export function registerApiRoutes(
   app: FastifyInstance,
   opts: RegisterApiRoutesOpts
 ): void {
-  const { db } = opts;
+  const { db, metrics } = opts;
+
+  app.get("/api/health", async () => {
+    return {
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: process.uptime(),
+    };
+  });
+
+  if (isFeatureEnabled("enableMetricsEndpoint")) {
+    app.get("/api/metrics", async (_req, reply) => {
+      reply.type("text/plain; version=0.0.4; charset=utf-8");
+      return metrics.toPrometheus();
+    });
+  }
 
   app.get("/api/projects", async () => {
     const projects = timeline.getProjects(db);

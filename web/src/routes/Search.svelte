@@ -2,7 +2,8 @@
   import * as api from "../lib/api";
   import type { GraphEntity, MemoryItem } from "../lib/api";
 
-  let { project, navigate }: { project: string; navigate: (hash: string) => void } = $props();
+  let { project, navigate }: { project: string; navigate: (hash: string) => void } =
+    $props();
 
   let query = $state("");
   let entities = $state<GraphEntity[]>([]);
@@ -51,9 +52,15 @@
     {#if entities.length === 0}
       <div class="text-muted">No entities found</div>
     {:else}
-      {#each entities as entity}
+      {#each entities as entity (entity.name)}
         <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
-          <a href="#/entity/{encodeURIComponent(entity.name)}" onclick={(e) => { e.preventDefault(); navigate(`#/entity/${encodeURIComponent(entity.name)}`); }}>
+          <a
+            href="#/entity/{encodeURIComponent(entity.name)}"
+            onclick={(e) => {
+              e.preventDefault();
+              navigate(`#/entity/${encodeURIComponent(entity.name)}`);
+            }}
+          >
             {entity.name}
           </a>
           <span class="tag">{entity.entityType}</span>
@@ -75,7 +82,7 @@
     {#if memoryItems.length === 0}
       <div class="text-muted">No memory items found</div>
     {:else}
-      {#each memoryItems as item}
+      {#each memoryItems as item (item.id)}
         <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
           <div>
             <span class="tag">{item.kind}</span>

@@ -19,11 +19,13 @@ const STDIO_MODE = process.argv.includes("--stdio");
 
 if (STDIO_MODE) {
   // Stdio mode doesn't need the HTTP port, always run
-  await import("../dist/main.js");
+  const { main } = await import("../dist/main.js");
+  await main();
 } else {
   const inUse = await isPortInUse(PORT);
   if (!inUse) {
-    await import("../dist/main.js");
+    const { main } = await import("../dist/main.js");
+    await main();
   } else {
     console.log(`memorantado already running on port ${PORT}`);
   }

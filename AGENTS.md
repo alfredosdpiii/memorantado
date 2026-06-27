@@ -8,11 +8,16 @@ Guidelines for AI coding agents working in this repository.
 npm run build        # Build web UI + TypeScript + copy schema to dist
 npm run dev          # Build web, then watch/run server with tsx (hot reload)
 npm run dev:web      # Vite dev server for web UI only (proxies API to :3789)
+npm run lint         # ESLint for TypeScript and Svelte
+npm run format:check # Prettier formatting check
+npm run test         # Vitest unit and integration tests
+npm run test:coverage # Vitest with coverage thresholds
 npm run typecheck    # TypeScript check without emit
+npm run validate     # Full local validation gate
 npm run start        # Run compiled dist/main.js
 ```
 
-**No test framework configured.** There are no tests in this project.
+Use `npm run validate` before submitting changes.
 
 ## Architecture
 
@@ -22,6 +27,8 @@ MCP (Model Context Protocol) server with persistent SQLite storage and Svelte we
 src/
   main.ts              # Fastify server entry, binds MCP + API + static
   security.ts          # Loopback-only + host/origin validation
+  featureFlags.ts      # Environment-backed feature flags
+  observability.ts     # Request IDs and Prometheus-style metrics
   api/routes.ts        # REST API for web UI
   mcp/
     server.ts          # MCP tool definitions (Zod schemas)
@@ -43,6 +50,7 @@ web/                   # Svelte 5 frontend (separate tsconfig)
 ```
 
 **Two-layer data model:**
+
 1. Knowledge Graph: entities + observations + relations (FTS5 search)
 2. Memory Timeline: append-only items with kind/title/content/tags
 
@@ -92,14 +100,14 @@ opts: { kind?: string; limit?: number; offset?: number } = {}
 
 ### Naming Conventions
 
-| Element | Convention | Example |
-|---------|------------|---------|
-| Types | PascalCase | `GraphEntity`, `MemoryItem` |
-| Functions | camelCase | `createEntities`, `searchNodes` |
-| Variables | camelCase | `seedIds`, `obsRows` |
-| Constants | UPPER_SNAKE | `MAX_SEED_ENTITIES`, `PORT` |
-| DB columns | snake_case | `entity_type`, `created_at` |
-| Files | kebab-case or camelCase | `routes.ts`, `eventStore.ts` |
+| Element    | Convention              | Example                         |
+| ---------- | ----------------------- | ------------------------------- |
+| Types      | PascalCase              | `GraphEntity`, `MemoryItem`     |
+| Functions  | camelCase               | `createEntities`, `searchNodes` |
+| Variables  | camelCase               | `seedIds`, `obsRows`            |
+| Constants  | UPPER_SNAKE             | `MAX_SEED_ENTITIES`, `PORT`     |
+| DB columns | snake_case              | `entity_type`, `created_at`     |
+| Files      | kebab-case or camelCase | `routes.ts`, `eventStore.ts`    |
 
 ### Fastify Routes
 
@@ -214,10 +222,12 @@ main().catch((err) => {
 
 ## Environment Variables
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `MEMORANTADO_PORT` | 3789 | Server port |
-| `MEMORANTADO_DB` | `~/.memorantado/memorantado.sqlite` | Database path |
+| Variable                     | Default                             | Purpose                |
+| ---------------------------- | ----------------------------------- | ---------------------- |
+| `MEMORANTADO_PORT`           | 3789                                | Server port            |
+| `MEMORANTADO_DB`             | `~/.memorantado/memorantado.sqlite` | Database path          |
+| `MEMORANTADO_ENABLE_METRICS` | `true`                              | Enable `/api/metrics`  |
+| `LOG_LEVEL`                  | `info`                              | Fastify/Pino log level |
 
 ## Quick Reference
 

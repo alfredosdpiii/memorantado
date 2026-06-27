@@ -1,0 +1,15 @@
+{
+  "name": "memorantado",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "svelte.svelte-vscode"
+      ]
+    }
+  },
+  "postCreateCommand": "npm ci",
+  "forwardPorts": [3789]
+}

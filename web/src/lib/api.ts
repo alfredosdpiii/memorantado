@@ -57,7 +57,9 @@ export async function search(
   relations: GraphRelation[];
   memoryItems: MemoryItem[];
 }> {
-  return request(`/api/search?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}`);
+  return request(
+    `/api/search?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}`
+  );
 }
 
 export async function getGraph(project: string): Promise<{
@@ -68,7 +70,9 @@ export async function getGraph(project: string): Promise<{
 }
 
 export async function getEntity(project: string, name: string): Promise<EntityDetail> {
-  return request(`/api/entity/${encodeURIComponent(name)}?project=${encodeURIComponent(project)}`);
+  return request(
+    `/api/entity/${encodeURIComponent(name)}?project=${encodeURIComponent(project)}`
+  );
 }
 
 export async function createEntity(

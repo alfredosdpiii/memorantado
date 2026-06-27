@@ -15,10 +15,13 @@
   let newContent = $state("");
   let newTags = $state("");
 
-  async function loadItems() {
+  async function loadItems(currentProject = project) {
     loading = true;
     try {
-      items = await api.getMemoryItems(project, { q: searchQuery || undefined, limit: 100 });
+      items = await api.getMemoryItems(currentProject, {
+        q: searchQuery || undefined,
+        limit: 100,
+      });
     } finally {
       loading = false;
     }
@@ -26,7 +29,10 @@
 
   async function createItem() {
     if (!newContent.trim()) return;
-    const tags = newTags.split(",").map((t) => t.trim()).filter(Boolean);
+    const tags = newTags
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
     await api.createMemoryItem(project, {
       kind: newKind,
       title: newTitle || undefined,
@@ -55,14 +61,13 @@
   });
 
   $effect(() => {
-    project;
-    loadItems();
+    loadItems(project);
   });
 </script>
 
 <div class="flex mb-4" style="justify-content: space-between; align-items: center;">
   <h1>Memory Items</h1>
-  <button class="primary" onclick={() => showCreate = !showCreate}>
+  <button class="primary" onclick={() => (showCreate = !showCreate)}>
     {showCreate ? "Cancel" : "+ Memory"}
   </button>
 </div>
@@ -111,7 +116,7 @@
 {:else if items.length === 0}
   <div class="empty">No memory items yet. Create one to get started.</div>
 {:else}
-  {#each items as item}
+  {#each items as item (item.id)}
     <div class="card">
       <div class="card-header">
         <div>
@@ -125,7 +130,7 @@
       <div style="white-space: pre-wrap;">{item.content}</div>
       {#if item.tags.length}
         <div style="margin-top: 8px;">
-          {#each item.tags as tag}
+          {#each item.tags as tag (tag)}
             <span class="tag">{tag}</span>
           {/each}
         </div>

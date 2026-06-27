@@ -1,0 +1,32 @@
+name: Error Insights
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  issues: write
+
+jobs:
+  file-issue:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `CI failure: ${run.display_title}`,
+              labels: ["type: bug", "area: infra", "priority: high"],
+              body: [
+                "Automated error-to-insight issue.",
+                "",
+                `Workflow run: ${run.html_url}`,
+                `Branch: ${run.head_branch}`,
+                `Commit: ${run.head_sha}`,
+              ].join("\n"),
+            });

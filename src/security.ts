@@ -2,17 +2,10 @@ import type { FastifyInstance } from "fastify";
 
 function isLoopback(addr?: string): boolean {
   if (!addr) return false;
-  return (
-    addr === "127.0.0.1" ||
-    addr === "::1" ||
-    addr.startsWith("::ffff:127.0.0.1")
-  );
+  return addr === "127.0.0.1" || addr === "::1" || addr.startsWith("::ffff:127.0.0.1");
 }
 
-export function installSecurity(
-  app: FastifyInstance,
-  opts: { port: number }
-): void {
+export function installSecurity(app: FastifyInstance, opts: { port: number }): void {
   const allowedHosts = new Set([
     `127.0.0.1:${opts.port}`,
     `localhost:${opts.port}`,

@@ -24,18 +24,22 @@ export function appendMemoryItem(
 ): MemoryItem {
   const tagsJson = item.tags?.length ? JSON.stringify(item.tags) : null;
 
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     INSERT INTO memory_items (project, kind, title, content, tags_json, source)
     VALUES (?, ?, ?, ?, ?, ?)
     RETURNING id, project, kind, title, content, tags_json, source, created_at
-  `).get(
-    project,
-    item.kind,
-    item.title ?? null,
-    item.content,
-    tagsJson,
-    item.source ?? null
-  ) as {
+  `
+    )
+    .get(
+      project,
+      item.kind,
+      item.title ?? null,
+      item.content,
+      tagsJson,
+      item.source ?? null
+    ) as {
     id: number;
     project: string;
     kind: string;
@@ -63,20 +67,26 @@ export function getMemoryItem(
   project: string,
   id: number
 ): MemoryItem | null {
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT id, project, kind, title, content, tags_json, source, created_at
     FROM memory_items
     WHERE project = ? AND id = ?
-  `).get(project, id) as {
-    id: number;
-    project: string;
-    kind: string;
-    title: string | null;
-    content: string;
-    tags_json: string | null;
-    source: string | null;
-    created_at: string;
-  } | undefined;
+  `
+    )
+    .get(project, id) as
+    | {
+        id: number;
+        project: string;
+        kind: string;
+        title: string | null;
+        content: string;
+        tags_json: string | null;
+        source: string | null;
+        created_at: string;
+      }
+    | undefined;
 
   if (!row) return null;
 
@@ -97,9 +107,13 @@ export function deleteMemoryItem(
   project: string,
   id: number
 ): boolean {
-  const info = db.prepare(`
+  const info = db
+    .prepare(
+      `
     DELETE FROM memory_items WHERE project = ? AND id = ?
-  `).run(project, id);
+  `
+    )
+    .run(project, id);
 
   return info.changes > 0;
 }
@@ -211,12 +225,16 @@ export function listMemoryItems(
 }
 
 export function getProjects(db: Database.Database): string[] {
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT project FROM entities
     UNION
     SELECT project FROM memory_items
     ORDER BY project
-  `).all() as Array<{ project: string }>;
+  `
+    )
+    .all() as Array<{ project: string }>;
 
   return rows.map((r) => r.project);
 }

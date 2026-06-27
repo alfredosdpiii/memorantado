@@ -18,9 +18,7 @@ export class InMemoryEventStore implements EventStore {
   private ttlMs: number;
   private maxEventsPerStream: number;
 
-  constructor(
-    opts: { ttlMs?: number; maxEventsPerStream?: number } = {}
-  ) {
+  constructor(opts: { ttlMs?: number; maxEventsPerStream?: number } = {}) {
     this.ttlMs = opts.ttlMs ?? 15 * 60 * 1000;
     this.maxEventsPerStream = opts.maxEventsPerStream ?? 5000;
   }

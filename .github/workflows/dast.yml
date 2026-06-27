@@ -1,0 +1,41 @@
+name: DAST
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  endpoint-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Start app and run endpoint security checks
+        run: |
+          npm start &
+          app_pid=$!
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:3789/api/health; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3789/api/health
+          curl -fsS -H "Host: evil.test" http://127.0.0.1:3789/api/health && exit 1 || true
+          kill "$app_pid"

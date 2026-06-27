@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["scripts/*.mjs", "tests/**/*.test.ts"],
+  "project": [
+    "src/**/*.ts",
+    "web/src/**/*.{ts,svelte}",
+    "tests/**/*.ts",
+    "scripts/*.mjs",
+    "*.config.{js,ts}"
+  ],
+  "ignoreDependencies": ["@tsconfig/svelte"],
+  "ignoreIssues": {
+    "src/db/db.ts": ["exports", "types"],
+    "src/featureFlags.ts": ["exports"],
+    "web/src/lib/api.ts": ["exports"]
+  },
+  "treatConfigHintsAsErrors": false
+}

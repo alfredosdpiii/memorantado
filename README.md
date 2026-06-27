@@ -132,16 +132,16 @@ For project-specific memory via HTTP:
 
 **Knowledge Graph** - Structured entity-relationship storage:
 
-| Table | Purpose |
-|-------|---------|
-| `entities` | Named nodes with type (e.g., "Claude" / "AI Assistant") |
-| `observations` | Facts attached to entities |
-| `relations` | Typed edges between entities |
+| Table          | Purpose                                                 |
+| -------------- | ------------------------------------------------------- |
+| `entities`     | Named nodes with type (e.g., "Claude" / "AI Assistant") |
+| `observations` | Facts attached to entities                              |
+| `relations`    | Typed edges between entities                            |
 
 **Memory Timeline** - Append-only event log:
 
-| Table | Purpose |
-|-------|---------|
+| Table          | Purpose                                             |
+| -------------- | --------------------------------------------------- |
 | `memory_items` | Timestamped records with kind, title, content, tags |
 
 Both layers support FTS5 full-text search with Porter stemming.
@@ -150,26 +150,26 @@ Both layers support FTS5 full-text search with Porter stemming.
 
 ### Knowledge Graph
 
-| Tool | Description |
-|------|-------------|
-| `create_entities` | Create entities with type and initial observations |
-| `create_relations` | Create typed relationships between entities |
-| `add_observations` | Append observations to existing entities |
-| `delete_entities` | Remove entities and cascade-delete relations/observations |
-| `delete_observations` | Remove specific observations from entities |
-| `delete_relations` | Remove relationships |
-| `read_graph` | Retrieve entire graph (entities + relations) |
-| `search_nodes` | Full-text search across entities and observations |
-| `open_nodes` | Retrieve specific entities by name |
+| Tool                  | Description                                               |
+| --------------------- | --------------------------------------------------------- |
+| `create_entities`     | Create entities with type and initial observations        |
+| `create_relations`    | Create typed relationships between entities               |
+| `add_observations`    | Append observations to existing entities                  |
+| `delete_entities`     | Remove entities and cascade-delete relations/observations |
+| `delete_observations` | Remove specific observations from entities                |
+| `delete_relations`    | Remove relationships                                      |
+| `read_graph`          | Retrieve entire graph (entities + relations)              |
+| `search_nodes`        | Full-text search across entities and observations         |
+| `open_nodes`          | Retrieve specific entities by name                        |
 
 ### Memory Timeline
 
-| Tool | Description |
-|------|-------------|
-| `append_memory_item` | Add timestamped memory with kind, title, content, tags |
-| `search_memory_items` | Full-text search with optional kind filter |
-| `get_memory_item` | Retrieve single item by ID |
-| `delete_memory_item` | Remove item by ID |
+| Tool                  | Description                                            |
+| --------------------- | ------------------------------------------------------ |
+| `append_memory_item`  | Add timestamped memory with kind, title, content, tags |
+| `search_memory_items` | Full-text search with optional kind filter             |
+| `get_memory_item`     | Retrieve single item by ID                             |
+| `delete_memory_item`  | Remove item by ID                                      |
 
 ### Tool Parameters
 
@@ -218,12 +218,12 @@ All tools accept an optional `project` parameter for namespace isolation. Defaul
 
 Access at `http://127.0.0.1:3789` after starting the server.
 
-| Route | Description |
-|-------|-------------|
-| **Search** (`#/`) | Global search across entities, observations, and memory items |
-| **Graph** (`#/graph`) | Visual graph of all entities and relationships |
-| **Entity** (`#/entity/:name`) | Detail view with observations and relations |
-| **Memory** (`#/memory`) | Browse and search memory timeline |
+| Route                         | Description                                                   |
+| ----------------------------- | ------------------------------------------------------------- |
+| **Search** (`#/`)             | Global search across entities, observations, and memory items |
+| **Graph** (`#/graph`)         | Visual graph of all entities and relationships                |
+| **Entity** (`#/entity/:name`) | Detail view with observations and relations                   |
+| **Memory** (`#/memory`)       | Browse and search memory timeline                             |
 
 Project selector in navbar persists to localStorage.
 
@@ -231,28 +231,30 @@ Project selector in navbar persists to localStorage.
 
 For web UI and programmatic access:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/projects` | GET | List all projects |
-| `/api/search?q=&project=` | GET | Unified search |
-| `/api/graph?project=` | GET | Full graph data |
-| `/api/entity/:name?project=` | GET | Single entity detail |
-| `/api/entity` | POST | Create entity |
-| `/api/entity/:name/observations` | POST | Add observation |
-| `/api/observation/:id` | DELETE | Remove observation |
-| `/api/relation` | POST | Create relation |
-| `/api/relation/:id` | DELETE | Remove relation |
-| `/api/memory-items?project=&q=&kind=` | GET | List/search memory |
-| `/api/memory-items` | POST | Create memory item |
-| `/api/memory-items/:id?project=` | GET | Get memory item |
-| `/api/memory-items/:id?project=` | DELETE | Delete memory item |
+| Endpoint                              | Method | Description          |
+| ------------------------------------- | ------ | -------------------- |
+| `/api/projects`                       | GET    | List all projects    |
+| `/api/search?q=&project=`             | GET    | Unified search       |
+| `/api/graph?project=`                 | GET    | Full graph data      |
+| `/api/entity/:name?project=`          | GET    | Single entity detail |
+| `/api/entity`                         | POST   | Create entity        |
+| `/api/entity/:name/observations`      | POST   | Add observation      |
+| `/api/observation/:id`                | DELETE | Remove observation   |
+| `/api/relation`                       | POST   | Create relation      |
+| `/api/relation/:id`                   | DELETE | Remove relation      |
+| `/api/memory-items?project=&q=&kind=` | GET    | List/search memory   |
+| `/api/memory-items`                   | POST   | Create memory item   |
+| `/api/memory-items/:id?project=`      | GET    | Get memory item      |
+| `/api/memory-items/:id?project=`      | DELETE | Delete memory item   |
 
 ## Configuration
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `MEMORANTADO_PORT` | `3789` | Server port |
-| `MEMORANTADO_DB` | `~/.memorantado/memorantado.sqlite` | Database file path |
+| Environment Variable         | Default                             | Description            |
+| ---------------------------- | ----------------------------------- | ---------------------- |
+| `MEMORANTADO_PORT`           | `3789`                              | Server port            |
+| `MEMORANTADO_DB`             | `~/.memorantado/memorantado.sqlite` | Database file path     |
+| `MEMORANTADO_ENABLE_METRICS` | `true`                              | Enable `/api/metrics`  |
+| `LOG_LEVEL`                  | `info`                              | Fastify/Pino log level |
 
 ## Development
 
@@ -266,6 +268,9 @@ npm run dev:web
 # Type check without build
 npm run typecheck
 
+# Run all validation gates
+npm run validate
+
 # Full build
 npm run build
 ```
@@ -276,6 +281,8 @@ npm run build
 src/
   main.ts              # Fastify server entry point
   security.ts          # Loopback + host/origin validation
+  featureFlags.ts      # Environment-backed feature flags
+  observability.ts     # Request IDs and Prometheus-style metrics
   api/routes.ts        # REST endpoints for web UI
   mcp/
     server.ts          # MCP tool definitions (Zod schemas)

@@ -37,26 +37,64 @@
     "build": "npm run build:web && tsc && npm run copy:schema",
     "build:web": "vite build --config web/vite.config.ts",
     "copy:schema": "cp src/db/schema.sql dist/db/schema.sql",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "deadcode": "knip",
+    "duplicates": "jscpd",
+    "size": "node scripts/check-bundle-size.mjs",
+    "docs:openapi": "node scripts/generate-openapi.mjs",
+    "docs:check": "node scripts/generate-openapi.mjs --check",
+    "flags:check": "node scripts/check-feature-flags.mjs",
+    "agents:check": "node scripts/validate-agents.mjs",
+    "labels:check": "node scripts/validate-labels.mjs",
+    "validate": "npm run lint && npm run format:check && npm run typecheck && npm run test:coverage && npm run build && npm run deadcode && npm run duplicates && npm run size && npm run docs:check && npm run flags:check && npm run agents:check && npm run labels:check",
     "start": "node dist/main.js",
+    "profile": "node --cpu-prof dist/main.js",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepare": "husky",
+    "prepublishOnly": "npm run validate"
+  },
+  "lint-staged": {
+    "*.{ts,svelte,js}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml,css}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
-    "@fastify/static": "^8.0.0",
+    "@fastify/static": "^9.1.3",
     "@modelcontextprotocol/sdk": "^1.25.0",
     "better-sqlite3": "^11.6.0",
     "fastify": "^5.1.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "@eslint/js": "^9.39.4",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tsconfig/svelte": "^5.0.0",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "eslint": "^9.39.4",
+    "eslint-plugin-svelte": "^3.20.0",
+    "globals": "^17.7.0",
+    "husky": "^9.1.7",
+    "jscpd": "^5.0.11",
+    "knip": "^6.21.0",
+    "lint-staged": "^17.0.8",
+    "prettier": "^3.8.5",
+    "prettier-plugin-svelte": "^4.1.1",
     "svelte": "^5.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vite": "^5.4.0"
+    "typescript-eslint": "^8.62.0",
+    "vite": "^8.1.0",
+    "vitest": "^4.1.9"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -1,0 +1,13 @@
+{
+  "threshold": 3,
+  "minLines": 6,
+  "minTokens": 60,
+  "reporters": ["console"],
+  "ignore": [
+    "coverage/**",
+    "dist/**",
+    "docs/openapi.json",
+    "node_modules/**",
+    "package-lock.json"
+  ]
+}

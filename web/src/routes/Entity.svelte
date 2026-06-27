@@ -14,12 +14,12 @@
   let relTo = $state("");
   let relType = $state("");
 
-  async function loadEntity() {
+  async function loadEntity(currentProject = project, currentName = name) {
     loading = true;
     error = null;
     try {
-      entity = await api.getEntity(project, name);
-    } catch (e) {
+      entity = await api.getEntity(currentProject, currentName);
+    } catch {
       error = "Entity not found";
       entity = null;
     } finally {
@@ -48,9 +48,7 @@
   });
 
   $effect(() => {
-    name;
-    project;
-    loadEntity();
+    loadEntity(project, name);
   });
 </script>
 
@@ -74,7 +72,7 @@
     {#if entity.observations.length === 0}
       <div class="text-muted mb-4">No observations yet</div>
     {:else}
-      {#each entity.observations as obs, i}
+      {#each entity.observations as obs (obs)}
         <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
           {obs}
         </div>
@@ -95,7 +93,7 @@
   <div class="card">
     <div class="card-header">
       <span class="card-title">Relations ({entity.relations.length})</span>
-      <button onclick={() => showAddRelation = !showAddRelation}>
+      <button onclick={() => (showAddRelation = !showAddRelation)}>
         {showAddRelation ? "Cancel" : "+ Relation"}
       </button>
     </div>
@@ -113,7 +111,7 @@
     {#if entity.relations.length === 0}
       <div class="text-muted">No relations</div>
     {:else}
-      {#each entity.relations as rel}
+      {#each entity.relations as rel (`${rel.from}-${rel.to}-${rel.relationType}`)}
         <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
           {#if rel.from === name}
             <span class="text-muted">{name}</span>

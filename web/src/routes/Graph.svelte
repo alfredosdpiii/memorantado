@@ -3,7 +3,8 @@
   import * as api from "../lib/api";
   import type { GraphEntity, GraphRelation } from "../lib/api";
 
-  let { project, navigate }: { project: string; navigate: (hash: string) => void } = $props();
+  let { project, navigate }: { project: string; navigate: (hash: string) => void } =
+    $props();
 
   let entities = $state<GraphEntity[]>([]);
   let relations = $state<GraphRelation[]>([]);
@@ -13,10 +14,10 @@
   let newEntityName = $state("");
   let newEntityType = $state("");
 
-  async function loadGraph() {
+  async function loadGraph(currentProject = project) {
     loading = true;
     try {
-      const result = await api.getGraph(project);
+      const result = await api.getGraph(currentProject);
       entities = result.entities;
       relations = result.relations;
     } finally {
@@ -38,14 +39,13 @@
   });
 
   $effect(() => {
-    project;
-    loadGraph();
+    loadGraph(project);
   });
 </script>
 
 <div class="flex mb-4" style="justify-content: space-between; align-items: center;">
   <h1>Graph</h1>
-  <button class="primary" onclick={() => showCreateEntity = !showCreateEntity}>
+  <button class="primary" onclick={() => (showCreateEntity = !showCreateEntity)}>
     {showCreateEntity ? "Cancel" : "+ Entity"}
   </button>
 </div>
@@ -55,7 +55,11 @@
     <div class="card-title mb-4">Create Entity</div>
     <div class="flex">
       <input placeholder="Name" bind:value={newEntityName} class="flex-1" />
-      <input placeholder="Type (e.g. person, project)" bind:value={newEntityType} class="flex-1" />
+      <input
+        placeholder="Type (e.g. person, project)"
+        bind:value={newEntityType}
+        class="flex-1"
+      />
       <button class="primary" onclick={createEntity}>Create</button>
     </div>
   </div>
@@ -70,13 +74,20 @@
     <div class="card-header">
       <span class="card-title">Entities ({entities.length})</span>
     </div>
-    {#each entities as entity}
+    {#each entities as entity (entity.name)}
       <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
-        <a href="#/entity/{encodeURIComponent(entity.name)}" onclick={(e) => { e.preventDefault(); navigate(`#/entity/${encodeURIComponent(entity.name)}`); }}>
+        <a
+          href="#/entity/{encodeURIComponent(entity.name)}"
+          onclick={(e) => {
+            e.preventDefault();
+            navigate(`#/entity/${encodeURIComponent(entity.name)}`);
+          }}
+        >
           {entity.name}
         </a>
         <span class="tag">{entity.entityType}</span>
-        <span class="text-sm text-muted">({entity.observations.length} observations)</span>
+        <span class="text-sm text-muted">({entity.observations.length} observations)</span
+        >
       </div>
     {/each}
   </div>
@@ -88,13 +99,25 @@
     {#if relations.length === 0}
       <div class="text-muted">No relations</div>
     {:else}
-      {#each relations as rel}
+      {#each relations as rel (`${rel.from}-${rel.to}-${rel.relationType}`)}
         <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
-          <a href="#/entity/{encodeURIComponent(rel.from)}" onclick={(e) => { e.preventDefault(); navigate(`#/entity/${encodeURIComponent(rel.from)}`); }}>
+          <a
+            href="#/entity/{encodeURIComponent(rel.from)}"
+            onclick={(e) => {
+              e.preventDefault();
+              navigate(`#/entity/${encodeURIComponent(rel.from)}`);
+            }}
+          >
             {rel.from}
           </a>
           <span class="text-muted"> -- {rel.relationType} --> </span>
-          <a href="#/entity/{encodeURIComponent(rel.to)}" onclick={(e) => { e.preventDefault(); navigate(`#/entity/${encodeURIComponent(rel.to)}`); }}>
+          <a
+            href="#/entity/{encodeURIComponent(rel.to)}"
+            onclick={(e) => {
+              e.preventDefault();
+              navigate(`#/entity/${encodeURIComponent(rel.to)}`);
+            }}
+          >
             {rel.to}
           </a>
         </div>

@@ -1,0 +1,13 @@
+{
+  "flags": [
+    {
+      "name": "enableMetricsEndpoint",
+      "env": "MEMORANTADO_ENABLE_METRICS",
+      "default": true,
+      "owner": "maintainers",
+      "createdAt": "2026-06-27",
+      "expiresAt": "2026-12-31",
+      "description": "Controls exposure of the local Prometheus metrics endpoint."
+    }
+  ]
+}

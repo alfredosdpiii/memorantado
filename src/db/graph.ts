@@ -201,9 +201,13 @@ export function deleteRelations(
 }
 
 export function readGraph(db: Database.Database, project: string): Graph {
-  const entities = db.prepare(`
+  const entities = db
+    .prepare(
+      `
     SELECT id, name, entity_type FROM entities WHERE project = ?
-  `).all(project) as Array<{ id: number; name: string; entity_type: string }>;
+  `
+    )
+    .all(project) as Array<{ id: number; name: string; entity_type: string }>;
 
   if (!entities.length) return { entities: [], relations: [] };
 
@@ -212,11 +216,15 @@ export function readGraph(db: Database.Database, project: string): Graph {
 
   const placeholders = entityIds.map(() => "?").join(",");
 
-  const obsRows = db.prepare(`
+  const obsRows = db
+    .prepare(
+      `
     SELECT entity_id, content FROM observations
     WHERE entity_id IN (${placeholders})
     ORDER BY id
-  `).all(...entityIds) as Array<{ entity_id: number; content: string }>;
+  `
+    )
+    .all(...entityIds) as Array<{ entity_id: number; content: string }>;
 
   const obsMap = new Map<number, string[]>();
   for (const o of obsRows) {
@@ -225,9 +233,13 @@ export function readGraph(db: Database.Database, project: string): Graph {
     obsMap.set(o.entity_id, arr);
   }
 
-  const relRows = db.prepare(`
+  const relRows = db
+    .prepare(
+      `
     SELECT from_entity_id, to_entity_id, relation_type FROM relations WHERE project = ?
-  `).all(project) as Array<{
+  `
+    )
+    .all(project) as Array<{
     from_entity_id: number;
     to_entity_id: number;
     relation_type: string;
@@ -256,14 +268,18 @@ function readExpandedGraphBySeedIds(
 
   const seedPlaceholders = seedIds.map(() => "?").join(",");
 
-  const relRows = db.prepare(`
+  const relRows = db
+    .prepare(
+      `
     SELECT id, from_entity_id, to_entity_id, relation_type
     FROM relations
     WHERE project = ?
       AND (from_entity_id IN (${seedPlaceholders})
            OR to_entity_id IN (${seedPlaceholders}))
     LIMIT ${MAX_RELATIONS}
-  `).all(project, ...seedIds, ...seedIds) as Array<{
+  `
+    )
+    .all(project, ...seedIds, ...seedIds) as Array<{
     id: number;
     from_entity_id: number;
     to_entity_id: number;
@@ -279,12 +295,16 @@ function readExpandedGraphBySeedIds(
 
   const allPlaceholders = allIds.map(() => "?").join(",");
 
-  const entRows = db.prepare(`
+  const entRows = db
+    .prepare(
+      `
     SELECT id, name, entity_type
     FROM entities
     WHERE project = ? AND id IN (${allPlaceholders})
     LIMIT ${MAX_ENTITIES}
-  `).all(project, ...allIds) as Array<{
+  `
+    )
+    .all(project, ...allIds) as Array<{
     id: number;
     name: string;
     entity_type: string;
@@ -296,12 +316,16 @@ function readExpandedGraphBySeedIds(
     entitiesById.set(e.id, { name: e.name, entityType: e.entity_type, observations: [] });
   }
 
-  const obsRows = db.prepare(`
+  const obsRows = db
+    .prepare(
+      `
     SELECT entity_id, content
     FROM observations
     WHERE entity_id IN (${allPlaceholders})
     ORDER BY id
-  `).all(...allIds) as Array<{ entity_id: number; content: string }>;
+  `
+    )
+    .all(...allIds) as Array<{ entity_id: number; content: string }>;
 
   for (const o of obsRows) {
     const ent = entitiesById.get(o.entity_id);
@@ -333,22 +357,30 @@ export function searchNodes(
 
   if (!ftsQuery) return { entities: [], relations: [] };
 
-  const entityHits = db.prepare(`
+  const entityHits = db
+    .prepare(
+      `
     SELECT e.id
     FROM entities_fts f
     JOIN entities e ON e.id = f.rowid
     WHERE f.project = ? AND entities_fts MATCH ?
     LIMIT ${MAX_SEED_ENTITIES}
-  `).all(project, ftsQuery) as Array<{ id: number }>;
+  `
+    )
+    .all(project, ftsQuery) as Array<{ id: number }>;
 
-  const obsHits = db.prepare(`
+  const obsHits = db
+    .prepare(
+      `
     SELECT DISTINCT e.id
     FROM observations_fts f
     JOIN observations o ON o.id = f.rowid
     JOIN entities e ON e.id = o.entity_id
     WHERE f.project = ? AND observations_fts MATCH ?
     LIMIT ${MAX_SEED_ENTITIES}
-  `).all(project, ftsQuery) as Array<{ id: number }>;
+  `
+    )
+    .all(project, ftsQuery) as Array<{ id: number }>;
 
   const seedSet = new Set<number>();
   for (const r of entityHits) seedSet.add(r.id);
@@ -368,10 +400,14 @@ export function openNodes(
 
   const placeholders = names.map(() => "?").join(",");
 
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT id FROM entities
     WHERE project = ? AND name IN (${placeholders})
-  `).all(project, ...names) as Array<{ id: number }>;
+  `
+    )
+    .all(project, ...names) as Array<{ id: number }>;
 
   const seedIds = rows.map((r) => r.id);
 
@@ -383,17 +419,27 @@ export function getEntityByName(
   project: string,
   name: string
 ): (GraphEntity & { id: number; relations: GraphRelation[] }) | null {
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT id, name, entity_type FROM entities WHERE project = ? AND name = ?
-  `).get(project, name) as { id: number; name: string; entity_type: string } | undefined;
+  `
+    )
+    .get(project, name) as { id: number; name: string; entity_type: string } | undefined;
 
   if (!row) return null;
 
-  const obsRows = db.prepare(`
+  const obsRows = db
+    .prepare(
+      `
     SELECT content FROM observations WHERE entity_id = ? ORDER BY id
-  `).all(row.id) as Array<{ content: string }>;
+  `
+    )
+    .all(row.id) as Array<{ content: string }>;
 
-  const relRows = db.prepare(`
+  const relRows = db
+    .prepare(
+      `
     SELECT 
       ef.name as from_name,
       et.name as to_name,
@@ -402,7 +448,9 @@ export function getEntityByName(
     JOIN entities ef ON ef.id = r.from_entity_id
     JOIN entities et ON et.id = r.to_entity_id
     WHERE r.project = ? AND (r.from_entity_id = ? OR r.to_entity_id = ?)
-  `).all(project, row.id, row.id) as Array<{
+  `
+    )
+    .all(project, row.id, row.id) as Array<{
     from_name: string;
     to_name: string;
     relation_type: string;
@@ -443,12 +491,16 @@ export function createRelationDirect(
 
   if (!fromRow || !toRow) return null;
 
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     INSERT INTO relations (project, from_entity_id, to_entity_id, relation_type)
     VALUES (?, ?, ?, ?)
     ON CONFLICT DO NOTHING
     RETURNING id
-  `).get(project, fromRow.id, toRow.id, relationType) as { id: number } | undefined;
+  `
+    )
+    .get(project, fromRow.id, toRow.id, relationType) as { id: number } | undefined;
 
   return result ?? null;
 }

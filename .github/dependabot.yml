@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-development:
+        dependency-type: development
+      npm-production:
+        dependency-type: production
+    open-pull-requests-limit: 5
+    labels:
+      - "type: chore"
+      - "area: infra"
