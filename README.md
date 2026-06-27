@@ -1,27 +1,39 @@
 # memorantado
 
-Persistent memory storage for AI agents via [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). SQLite-backed knowledge graph and timeline with full-text search, plus a Svelte web UI for visualization.
+Persistent local memory for AI agents via [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). memorantado stores durable context in SQLite with a knowledge graph, append-only timeline, and hybrid episodic/semantic memory layer, plus a Svelte web UI for inspection and retrieval debugging.
 
 ## Features
 
-- **Knowledge Graph**: Entities with typed relationships and observations
-- **Memory Timeline**: Append-only items with kind, tags, and content
-- **Full-Text Search**: FTS5-powered search across all data
-- **Multi-Project**: Isolated namespaces via `?project=` parameter
-- **Web Dashboard**: Svelte 5 UI for browsing, searching, and editing
-- **Local-Only Security**: Binds to 127.0.0.1 with host/origin validation
+- **Knowledge Graph**: Entities with typed relationships and observations.
+- **Memory Timeline**: Append-only memory items with kind, title, tags, source, and content.
+- **Hybrid Memory**: Raw episodes, semantic memories, provenance links, conflict tracking, local embeddings, and ranked context packs.
+- **Full-Text Search**: FTS5-powered search across graph, timeline, episodes, and semantic memories.
+- **Local Retrieval**: Deterministic local hash embeddings with FTS and lexical overlap scoring.
+- **Multi-Project**: Isolated namespaces via `project` parameters or `MEMORANTADO_PROJECT`.
+- **Web Dashboard**: Svelte 5 UI for search, graph browsing, timeline browsing, hybrid memory inspection, and benchmark runs.
+- **Local-Only Security**: Binds to `127.0.0.1` with host and origin validation.
+- **Agent-Ready Tooling**: MCP, REST API, OpenAPI generation, validation scripts, CI, and benchmark scripts.
 
 ## Installation
 
 ### From npm (recommended)
 
 ```bash
-# Global install
 npm install -g memorantado
 memorantado
+```
 
-# Or run directly with npx
+Run the MCP stdio server directly:
+
+```bash
+memorantado --stdio
+```
+
+Or run without a global install:
+
+```bash
 npx memorantado
+npx memorantado --stdio
 ```
 
 ### From source
@@ -34,33 +46,37 @@ npm run build
 npm start
 ```
 
-Server runs at `http://127.0.0.1:3789`
+HTTP mode serves the dashboard and API at `http://127.0.0.1:3789`.
 
 ## MCP Configuration
 
 ### Stdio (recommended)
 
-Add to your MCP client configuration (e.g., Claude Desktop, Cursor, etc.):
+Use stdio for local agents because it does not require a long-running HTTP process.
 
 ```json
 {
   "mcpServers": {
     "memorantado": {
-      "command": "npx",
-      "args": ["memorantado", "--stdio"]
+      "type": "stdio",
+      "command": "memorantado",
+      "args": ["--stdio"],
+      "disabled": false,
+      "timeoutMs": 300000
     }
   }
 }
 ```
 
-For project-specific memory, set the `MEMORANTADO_PROJECT` environment variable:
+For project-specific memory, set `MEMORANTADO_PROJECT`:
 
 ```json
 {
   "mcpServers": {
     "memorantado": {
-      "command": "npx",
-      "args": ["memorantado", "--stdio"],
+      "type": "stdio",
+      "command": "memorantado",
+      "args": ["--stdio"],
       "env": {
         "MEMORANTADO_PROJECT": "my-project"
       }
@@ -69,13 +85,29 @@ For project-specific memory, set the `MEMORANTADO_PROJECT` environment variable:
 }
 ```
 
+If you prefer `npx`:
+
+```json
+{
+  "mcpServers": {
+    "memorantado": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["memorantado", "--stdio"]
+    }
+  }
+}
+```
+
 ### HTTP
 
-Alternatively, run the server and connect over HTTP:
+Start the local HTTP server:
 
 ```bash
-npx memorantado
+memorantado
 ```
+
+Then configure an HTTP MCP client:
 
 ```json
 {
@@ -101,12 +133,34 @@ For project-specific memory via HTTP:
 }
 ```
 
+## Recommended Agent Usage
+
+1. Call `retrieve_memory_context` at the start of non-trivial work.
+2. Save durable preferences, decisions, procedures, and project facts with `append_episode` using extraction enabled.
+3. Use `upsert_semantic_memory` for explicit facts that should be reinforced or conflict-checked.
+4. Use `explain_semantic_memory` when provenance matters.
+5. Never store secrets, credentials, API keys, private tokens, or sensitive personal data.
+
 ## Architecture
 
+```mermaid
+flowchart TD
+  Client[MCP Client] --> MCP[MCP Server]
+  UI[Web UI] --> API[REST API]
+  API --> DB[(SQLite)]
+  MCP --> DB
+  DB --> Graph[Graph]
+  DB --> Timeline[Timeline]
+  DB --> Hybrid[Hybrid]
+  Hybrid --> Episodes[Episodes]
+  Hybrid --> Semantic[Semantic]
+  Hybrid --> Retrieval[Retrieval]
 ```
+
+```text
                     +------------------+
                     |   MCP Clients    |
-                    | (Claude, Cursor) |
+                    | Droid, Pi, etc.  |
                     +--------+---------+
                              |
                              v
@@ -121,32 +175,49 @@ For project-specific memory via HTTP:
         v                   v                   v
 +-------+-------------------+-------+   +---------------+
 |           SQLite Database         |   |   Svelte UI   |
-| - entities, observations          |   | - Search      |
-| - relations                       |   | - Graph view  |
-| - memory_items                    |   | - Entity view |
-| - FTS5 indexes                    |   | - Memory list |
+| - graph entities and relations    |   | - Search      |
+| - timeline memory items           |   | - Graph       |
+| - episodes and semantic memories  |   | - Memory      |
+| - provenance and conflicts        |   | - Hybrid      |
+| - FTS5 and local embeddings       |   | - Inspector   |
 +-----------------------------------+   +---------------+
 ```
 
 ### Data Model
 
-**Knowledge Graph** - Structured entity-relationship storage:
+**Knowledge Graph** stores structured entity-relationship data.
 
-| Table          | Purpose                                                 |
-| -------------- | ------------------------------------------------------- |
-| `entities`     | Named nodes with type (e.g., "Claude" / "AI Assistant") |
-| `observations` | Facts attached to entities                              |
-| `relations`    | Typed edges between entities                            |
+| Table          | Purpose                                                          |
+| -------------- | ---------------------------------------------------------------- |
+| `entities`     | Named nodes with type, such as `person`, `project`, or `concept` |
+| `observations` | Facts attached to entities                                       |
+| `relations`    | Typed edges between entities                                     |
 
-**Memory Timeline** - Append-only event log:
+**Memory Timeline** stores append-only records.
 
-| Table          | Purpose                                             |
-| -------------- | --------------------------------------------------- |
-| `memory_items` | Timestamped records with kind, title, content, tags |
+| Table          | Purpose                                                         |
+| -------------- | --------------------------------------------------------------- |
+| `memory_items` | Timestamped records with kind, title, content, tags, and source |
 
-Both layers support FTS5 full-text search with Porter stemming.
+**Hybrid Memory** stores raw events, extracted facts, retrieval metadata, and provenance.
+
+| Table                | Purpose                                                  |
+| -------------------- | -------------------------------------------------------- |
+| `episodes`           | Raw conversation or event records                        |
+| `semantic_memories`  | Extracted or explicitly upserted facts and preferences   |
+| `memory_sources`     | Links semantic memories back to source episodes          |
+| `memory_conflicts`   | Open, resolved, or ignored memory conflicts              |
+| `entity_aliases`     | Canonical names and aliases for future entity resolution |
+| `memory_embeddings`  | Local embedding vectors for semantic memories            |
+| `episode_embeddings` | Local embedding vectors for episodes                     |
+| `memory_access_log`  | Retrieval queries, selected result IDs, and latency      |
+| `benchmark_runs`     | Local benchmark reports and metrics                      |
+
+All memory layers use SQLite and FTS5. Hybrid retrieval combines FTS, deterministic local embeddings, lexical overlap, recency, importance, and confidence.
 
 ## MCP Tools
+
+All tools accept an optional `project` parameter for namespace isolation. Defaults to `global`.
 
 ### Knowledge Graph
 
@@ -158,59 +229,77 @@ Both layers support FTS5 full-text search with Porter stemming.
 | `delete_entities`     | Remove entities and cascade-delete relations/observations |
 | `delete_observations` | Remove specific observations from entities                |
 | `delete_relations`    | Remove relationships                                      |
-| `read_graph`          | Retrieve entire graph (entities + relations)              |
+| `read_graph`          | Retrieve entire graph                                     |
 | `search_nodes`        | Full-text search across entities and observations         |
 | `open_nodes`          | Retrieve specific entities by name                        |
 
 ### Memory Timeline
 
-| Tool                  | Description                                            |
-| --------------------- | ------------------------------------------------------ |
-| `append_memory_item`  | Add timestamped memory with kind, title, content, tags |
-| `search_memory_items` | Full-text search with optional kind filter             |
-| `get_memory_item`     | Retrieve single item by ID                             |
-| `delete_memory_item`  | Remove item by ID                                      |
+| Tool                  | Description                                                        |
+| --------------------- | ------------------------------------------------------------------ |
+| `append_memory_item`  | Add timestamped memory with kind, title, content, tags, and source |
+| `search_memory_items` | Full-text search with optional kind filter                         |
+| `get_memory_item`     | Retrieve a single memory item by ID                                |
+| `delete_memory_item`  | Remove a memory item by ID                                         |
 
-### Tool Parameters
+### Hybrid Memory
 
-All tools accept an optional `project` parameter for namespace isolation. Defaults to "global".
+| Tool                       | Description                                                   |
+| -------------------------- | ------------------------------------------------------------- |
+| `append_episode`           | Append a raw episode and optionally extract semantic memories |
+| `extract_episode_memories` | Run local extraction for an existing episode                  |
+| `retrieve_memory_context`  | Return a ranked context pack for a query                      |
+| `list_episodes`            | List raw episodes                                             |
+| `list_semantic_memories`   | List semantic memories by status                              |
+| `upsert_semantic_memory`   | Create, reinforce, or conflict-check a semantic memory        |
+| `explain_semantic_memory`  | Return a semantic memory with source episodes and conflicts   |
+| `list_memory_conflicts`    | List open, resolved, or ignored conflicts                     |
+| `resolve_memory_conflict`  | Mark a conflict resolved or ignored                           |
+| `run_memory_benchmark`     | Run the local synthetic fixture benchmark                     |
 
-#### create_entities
+### Example Tool Parameters
+
+#### append_episode
 
 ```typescript
 {
   project?: string,
-  entities: Array<{
-    name: string,         // Unique identifier
-    entityType: string,   // Category (e.g., "person", "concept")
-    observations?: string[] // Initial facts
-  }>
+  session?: string,
+  actor?: string,
+  role?: string,
+  content: string,
+  source?: string,
+  metadata?: Record<string, unknown>,
+  extract?: boolean
 }
 ```
 
-#### create_relations
+#### retrieve_memory_context
 
 ```typescript
 {
   project?: string,
-  relations: Array<{
-    from: string,         // Source entity name
-    to: string,           // Target entity name
-    relationType: string  // Edge label (e.g., "knows", "contains")
-  }>
+  query: string,
+  limit?: number,
+  tokenBudget?: number
 }
 ```
 
-#### append_memory_item
+#### upsert_semantic_memory
 
 ```typescript
 {
   project?: string,
-  kind: string,           // Category (e.g., "note", "decision", "task")
-  title?: string,         // Optional title
-  content: string,        // Main content
-  tags?: string[],        // Optional tags for filtering
-  source?: string         // Optional source reference
+  scope?: "user" | "agent" | "session" | "project" | "global",
+  kind?: string,
+  subject: string,
+  predicate?: string,
+  object?: string,
+  content: string,
+  confidence?: number,
+  importance?: number,
+  sourceEpisodeId?: number,
+  metadata?: Record<string, unknown>
 }
 ```
 
@@ -218,43 +307,80 @@ All tools accept an optional `project` parameter for namespace isolation. Defaul
 
 Access at `http://127.0.0.1:3789` after starting the server.
 
-| Route                         | Description                                                   |
-| ----------------------------- | ------------------------------------------------------------- |
-| **Search** (`#/`)             | Global search across entities, observations, and memory items |
-| **Graph** (`#/graph`)         | Visual graph of all entities and relationships                |
-| **Entity** (`#/entity/:name`) | Detail view with observations and relations                   |
-| **Memory** (`#/memory`)       | Browse and search memory timeline                             |
+| Route                         | Description                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------ |
+| **Search** (`#/`)             | Global search across graph and timeline memory                                             |
+| **Graph** (`#/graph`)         | Visual graph of entities and relationships                                                 |
+| **Entity** (`#/entity/:name`) | Detail view with observations and relations                                                |
+| **Memory** (`#/memory`)       | Browse and search memory timeline                                                          |
+| **Hybrid** (`#/hybrid`)       | Append episodes, inspect semantic memories, conflicts, retrieval packs, and benchmark runs |
 
-Project selector in navbar persists to localStorage.
+Project selector in the navbar persists to `localStorage`.
 
 ## REST API
 
 For web UI and programmatic access:
 
-| Endpoint                              | Method | Description          |
-| ------------------------------------- | ------ | -------------------- |
-| `/api/projects`                       | GET    | List all projects    |
-| `/api/search?q=&project=`             | GET    | Unified search       |
-| `/api/graph?project=`                 | GET    | Full graph data      |
-| `/api/entity/:name?project=`          | GET    | Single entity detail |
-| `/api/entity`                         | POST   | Create entity        |
-| `/api/entity/:name/observations`      | POST   | Add observation      |
-| `/api/observation/:id`                | DELETE | Remove observation   |
-| `/api/relation`                       | POST   | Create relation      |
-| `/api/relation/:id`                   | DELETE | Remove relation      |
-| `/api/memory-items?project=&q=&kind=` | GET    | List/search memory   |
-| `/api/memory-items`                   | POST   | Create memory item   |
-| `/api/memory-items/:id?project=`      | GET    | Get memory item      |
-| `/api/memory-items/:id?project=`      | DELETE | Delete memory item   |
+| Endpoint                                  | Method | Description                                 |
+| ----------------------------------------- | ------ | ------------------------------------------- |
+| `/api/health`                             | GET    | Health check                                |
+| `/api/metrics`                            | GET    | Prometheus-style metrics                    |
+| `/api/projects`                           | GET    | List all projects                           |
+| `/api/search?q=&project=`                 | GET    | Unified search                              |
+| `/api/graph?project=`                     | GET    | Full graph data                             |
+| `/api/entity/:name?project=`              | GET    | Single entity detail                        |
+| `/api/entity`                             | POST   | Create entity                               |
+| `/api/entity/:name/observations`          | POST   | Add observation                             |
+| `/api/observation/:id`                    | DELETE | Remove observation                          |
+| `/api/relation`                           | POST   | Create relation                             |
+| `/api/relation/:id`                       | DELETE | Remove relation                             |
+| `/api/memory-items?project=&q=&kind=`     | GET    | List or search timeline memory              |
+| `/api/memory-items`                       | POST   | Create timeline memory item                 |
+| `/api/memory-items/:id?project=`          | GET    | Get memory item                             |
+| `/api/memory-items/:id?project=`          | DELETE | Delete memory item                          |
+| `/api/episodes?project=`                  | GET    | List raw episodes                           |
+| `/api/episodes`                           | POST   | Append episode, optionally extract memories |
+| `/api/episodes/:id?project=`              | GET    | Get episode                                 |
+| `/api/episodes/:id/extract`               | POST   | Extract semantic memories                   |
+| `/api/semantic-memories?project=&status=` | GET    | List semantic memories                      |
+| `/api/semantic-memories`                  | POST   | Upsert semantic memory                      |
+| `/api/semantic-memories/:id/explain`      | GET    | Explain memory provenance                   |
+| `/api/retrieve-context`                   | POST   | Retrieve ranked context pack                |
+| `/api/memory-conflicts?project=&status=`  | GET    | List memory conflicts                       |
+| `/api/memory-conflicts/:id/resolve`       | POST   | Resolve or ignore conflict                  |
+| `/api/memory-benchmark`                   | POST   | Run local synthetic benchmark               |
+
+Generated OpenAPI output is available in `docs/openapi.json` and can be refreshed with `npm run docs:openapi`.
+
+## Benchmarks
+
+### Local synthetic fixture
+
+`npm run bench:memory` runs a small deterministic fixture benchmark against a local SQLite database.
+
+Current synthetic score:
+
+| Benchmark      | Cases | Accuracy |
+| -------------- | ----- | -------- |
+| `bench:memory` | 2/2   | 100%     |
+
+This benchmark checks that local ingestion, extraction, retrieval, and benchmark persistence work together. It is intentionally small and synthetic.
+
+### Public memory benchmark harness
+
+`npm run bench:public-memory` runs a local retrieval/evidence proxy harness over public datasets such as LoCoMo, LongMemEval, DMR-style MSC Self-Instruct, and AMA-Bench.
+
+Important caveat: this script is not an official product benchmark run and must not be cited as an apples-to-apples comparison against systems that use LLM answer generation and LLM judges. Use it for local regression checks of retrieval coverage only.
 
 ## Configuration
 
-| Environment Variable         | Default                             | Description            |
-| ---------------------------- | ----------------------------------- | ---------------------- |
-| `MEMORANTADO_PORT`           | `3789`                              | Server port            |
-| `MEMORANTADO_DB`             | `~/.memorantado/memorantado.sqlite` | Database file path     |
-| `MEMORANTADO_ENABLE_METRICS` | `true`                              | Enable `/api/metrics`  |
-| `LOG_LEVEL`                  | `info`                              | Fastify/Pino log level |
+| Environment Variable         | Default                             | Description                   |
+| ---------------------------- | ----------------------------------- | ----------------------------- |
+| `MEMORANTADO_PORT`           | `3789`                              | Server port                   |
+| `MEMORANTADO_DB`             | `~/.memorantado/memorantado.sqlite` | Database file path            |
+| `MEMORANTADO_PROJECT`        | `global`                            | Default MCP project namespace |
+| `MEMORANTADO_ENABLE_METRICS` | `true`                              | Enable `/api/metrics`         |
+| `LOG_LEVEL`                  | `info`                              | Fastify/Pino log level        |
 
 ## Development
 
@@ -262,11 +388,23 @@ For web UI and programmatic access:
 # Watch mode with hot reload
 npm run dev
 
-# Web UI only (Vite dev server, proxies API)
+# Web UI only, proxies API
 npm run dev:web
 
 # Type check without build
 npm run typecheck
+
+# Run tests
+npm run test
+
+# Run coverage
+npm run test:coverage
+
+# Run local synthetic benchmark
+npm run bench:memory
+
+# Run public retrieval/evidence proxy benchmark
+npm run bench:public-memory
 
 # Run all validation gates
 npm run validate
@@ -277,13 +415,15 @@ npm run build
 
 ### Project Structure
 
-```
+```text
 src/
   main.ts              # Fastify server entry point
   security.ts          # Loopback + host/origin validation
   featureFlags.ts      # Environment-backed feature flags
   observability.ts     # Request IDs and Prometheus-style metrics
   api/routes.ts        # REST endpoints for web UI
+  bench/               # Local and public retrieval benchmark scripts
+  memory/              # Hybrid memory types, extraction, and local embeddings
   mcp/
     server.ts          # MCP tool definitions (Zod schemas)
     http.ts            # StreamableHTTPServerTransport
@@ -295,25 +435,29 @@ src/
     schema.sql         # DDL + FTS5 + triggers
     graph.ts           # Knowledge graph operations
     timeline.ts        # Memory timeline operations
+    hybridMemory.ts    # Hybrid memory write/list/conflict/benchmark service
+    hybridRetrieval.ts # Hybrid retrieval and context rendering
+    hybridRows.ts      # Row mapping and scoring helpers
 
-web/                   # Svelte 5 frontend
+web/
   src/
     App.svelte         # Router + project selector
     lib/api.ts         # API client
-    routes/            # Page components
+    routes/            # Search, Graph, Entity, Memory, Hybrid pages
 ```
 
 ## Security
 
-- **Loopback only**: Server binds to `127.0.0.1`, rejects non-loopback connections
-- **Host validation**: Checks `Host` header against allowed values
-- **Origin validation**: API routes validate `Origin` header; MCP endpoint rejects browser origins
-- **No external network exposure**: Designed for local-only operation
+- **Loopback only**: Server binds to `127.0.0.1` and rejects non-loopback connections.
+- **Host validation**: Checks `Host` header against allowed values.
+- **Origin validation**: API routes validate `Origin` header, and MCP rejects browser origins.
+- **No external network exposure**: Designed for local-only operation.
+- **No secret memory**: Do not store secrets, credentials, tokens, API keys, or sensitive personal data.
 
 ## Requirements
 
 - Node.js >= 20.0.0
-- SQLite3 (bundled via better-sqlite3)
+- SQLite3, bundled through `better-sqlite3`
 
 ## License
 

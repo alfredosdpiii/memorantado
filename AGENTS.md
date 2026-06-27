@@ -219,6 +219,16 @@ main().catch((err) => {
 - Never omit `.js` extension in relative imports
 - Never use dynamic SQL string concatenation (use prepared statements)
 - Never commit sensitive data (db path resolved at runtime via env/homedir)
+- Never present `bench:public-memory` results as official product benchmark results; they are retrieval/evidence proxy checks.
+
+## Persistent Memory via memorantado MCP
+
+- Use the `memorantado` MCP server over stdio: `memorantado --stdio`.
+- Start non-trivial work by retrieving relevant context with `retrieve_memory_context`.
+- Store durable user preferences, decisions, procedures, and important project facts with `append_episode` and extraction enabled.
+- Prefer semantic memory tools for durable facts and episode/timeline tools when provenance matters.
+- Never store secrets, credentials, API keys, private tokens, or sensitive personal data in memorantado.
+- If a remembered fact changes, preserve the history with a new episode/update instead of silently overwriting context.
 
 ## Environment Variables
 

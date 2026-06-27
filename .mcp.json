@@ -1,8 +1,11 @@
 {
   "mcpServers": {
     "memorantado": {
-      "type": "http",
-      "url": "http://localhost:3789/mcp"
+      "type": "stdio",
+      "command": "memorantado",
+      "args": ["--stdio"],
+      "disabled": false,
+      "timeoutMs": 300000
     }
   }
 }
