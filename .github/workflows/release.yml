@@ -11,31 +11,35 @@ permissions:
   id-token: write
 
 jobs:
-  release-please:
+  publish:
     runs-on: ubuntu-latest
     steps:
-      - id: release
-        uses: googleapis/release-please-action@v4
-        with:
-          release-type: node
-
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created }}
 
       - uses: actions/setup-node@v4
-        if: ${{ steps.release.outputs.release_created }}
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Update npm for trusted publishing
-        if: ${{ steps.release.outputs.release_created }}
         run: npm install --global npm@latest
 
+      - name: Check package version
+        id: version
+        run: |
+          local_version=$(node -p "require('./package.json').version")
+          published_version=$(npm view memorantado version 2>/dev/null || true)
+          echo "local=$local_version" >> "$GITHUB_OUTPUT"
+          if [ "$local_version" = "$published_version" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install dependencies
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm ci
 
       - name: Publish package
-        if: ${{ steps.release.outputs.release_created }}
-        run: npm publish --provenance --access public
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm publish --access public
