@@ -100,7 +100,7 @@ function append(db: Database.Database, project: string, input: AppendEpisodeInpu
   appendEpisode(db, project, input);
 }
 
-function evaluate(
+async function evaluate(
   db: Database.Database,
   suite: SuiteName,
   project: string,
@@ -110,8 +110,8 @@ function evaluate(
   answer: string,
   evidenceIds: string[],
   opts: Options
-): CaseResult {
-  const pack = retrieveContext(db, project, question, {
+): Promise<CaseResult> {
+  const pack = await retrieveContext(db, project, question, {
     limit: opts.topK,
     tokenBudget: opts.tokenBudget,
   });
@@ -146,15 +146,15 @@ async function runLocomo(db: Database.Database, opts: Options): Promise<CaseResu
       const category = String(item.category ?? "");
       if (!["1", "2", "3", "4"].includes(category)) continue;
       results.push(
-        evaluate(
+        await evaluate(
           db,
           "locomo",
           project,
-          `${sampleId}-${results.length}`,
+          stringField(item, "question_id") || String(results.length),
           category,
           stringField(item, "question"),
           stringField(item, "answer"),
-          stringArray(item.evidence),
+          arrayField(item, "evidence").map(String),
           opts
         )
       );
@@ -162,7 +162,6 @@ async function runLocomo(db: Database.Database, opts: Options): Promise<CaseResu
   }
   return results;
 }
-
 async function runLongMemEval(
   db: Database.Database,
   opts: Options
@@ -180,7 +179,7 @@ async function runLongMemEval(
     const project = `bench-longmemeval-${index}`;
     ingestLongMemEval(db, project, row);
     results.push(
-      evaluate(
+      await evaluate(
         db,
         "longmemeval",
         project,
@@ -195,7 +194,6 @@ async function runLongMemEval(
   }
   return results;
 }
-
 async function runDmr(db: Database.Database, opts: Options): Promise<CaseResult[]> {
   const text = await cachedText(
     DATASET_URLS.dmr,
@@ -210,7 +208,7 @@ async function runDmr(db: Database.Database, opts: Options): Promise<CaseResult[
     ingestDmr(db, project, row);
     const instruction = objectField(row, "self_instruct");
     results.push(
-      evaluate(
+      await evaluate(
         db,
         "dmr",
         project,
@@ -238,7 +236,7 @@ async function runAma(db: Database.Database, opts: Options): Promise<CaseResult[
       if (limitReached(results, opts)) return results;
       const item = qa as Record<string, unknown>;
       results.push(
-        evaluate(
+        await evaluate(
           db,
           "ama",
           project,

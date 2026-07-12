@@ -1,4 +1,6 @@
 import type { FastifyInstance } from "fastify";
+import * as exchange from "../db/exchange.js";
+import * as wiki from "../wiki/obsidian.js";
 import type Database from "better-sqlite3";
 import { resolveProject } from "../mcp/project.js";
 import { isFeatureEnabled } from "../featureFlags.js";
@@ -6,6 +8,7 @@ import type { HttpMetrics } from "../observability.js";
 import * as graph from "../db/graph.js";
 import * as hybrid from "../db/hybridMemory.js";
 import * as timeline from "../db/timeline.js";
+import { backfillConfiguredEmbeddings } from "../memory/embeddingBackfill.js";
 
 type RegisterApiRoutesOpts = {
   db: Database.Database;
@@ -286,11 +289,18 @@ export function registerApiRoutes(
   });
 
   app.get<{
-    Querystring: { project?: string; status?: string; limit?: string; offset?: string };
+    Querystring: {
+      project?: string;
+      status?: string;
+      lifecycleStatus?: "active" | "archived";
+      limit?: string;
+      offset?: string;
+    };
   }>("/api/semantic-memories", async (req) => {
     const project = resolveProject(req.query.project);
     return hybrid.listSemanticMemories(db, project, {
       status: req.query.status,
+      lifecycleStatus: req.query.lifecycleStatus,
       limit: req.query.limit ? parseInt(req.query.limit, 10) : 100,
       offset: req.query.offset ? parseInt(req.query.offset, 10) : 0,
     });
@@ -315,13 +325,54 @@ export function registerApiRoutes(
   });
 
   app.post<{
-    Body: { project?: string; query: string; limit?: number; tokenBudget?: number };
+    Params: { id: string };
+    Body: {
+      project?: string;
+      status: "active" | "archived";
+      reason?: string;
+    };
+  }>("/api/semantic-memories/:id/lifecycle", async (req, reply) => {
+    const project = resolveProject(req.body.project);
+    const memory = hybrid.setMemoryLifecycle(
+      db,
+      project,
+      parseInt(req.params.id, 10),
+      req.body.status,
+      req.body.reason
+    );
+    if (!memory) {
+      reply.code(404);
+      return { error: "not_found" };
+    }
+    return memory;
+  });
+
+  app.post<{
+    Body: {
+      project?: string;
+      query: string;
+      limit?: number;
+      tokenBudget?: number;
+      mode?: "current" | "as_of" | "history" | "all";
+      asOf?: string;
+      recordedAt?: string;
+    };
   }>("/api/retrieve-context", async (req) => {
     const project = resolveProject(req.body.project);
     return hybrid.retrieveContext(db, project, req.body.query, {
       limit: req.body.limit,
       tokenBudget: req.body.tokenBudget,
+      mode: req.body.mode,
+      asOf: req.body.asOf,
+      recordedAt: req.body.recordedAt,
     });
+  });
+
+  app.post<{
+    Body: { project?: string };
+  }>("/api/embeddings/backfill", async (req) => {
+    const project = resolveProject(req.body.project);
+    return backfillConfiguredEmbeddings(db, project);
   });
 
   app.get<{
@@ -337,6 +388,9 @@ export function registerApiRoutes(
       project?: string;
       resolvedMemoryId?: number;
       status?: "resolved" | "ignored";
+      actor?: string;
+      reason?: string;
+      metadata?: Record<string, unknown>;
     };
   }>("/api/memory-conflicts/:id/resolve", async (req) => {
     const project = resolveProject(req.body.project);
@@ -345,14 +399,40 @@ export function registerApiRoutes(
       project,
       parseInt(req.params.id, 10),
       req.body.resolvedMemoryId,
-      req.body.status ?? "resolved"
+      req.body.status ?? "resolved",
+      {
+        actor: req.body.actor,
+        reason: req.body.reason,
+        metadata: req.body.metadata,
+      }
     );
   });
 
+  app.get<{
+    Querystring: { project?: string };
+  }>("/api/exchange/jsonl", async (req, reply) => {
+    const project = resolveProject(req.query.project);
+    reply.type("application/x-ndjson");
+    return exchange.exportProjectJsonl(db, project);
+  });
+
   app.post<{
-    Body: { project?: string };
+    Body: { project?: string; jsonl: string };
+  }>("/api/exchange/jsonl", async (req) => {
+    return exchange.importProjectJsonl(db, req.body.jsonl, req.body.project);
+  });
+
+  app.post<{
+    Body: { project?: string; vaultRoot: string };
+  }>("/api/wiki/obsidian", async (req) => {
+    const project = resolveProject(req.body.project);
+    return wiki.buildObsidianWiki(db, project, req.body.vaultRoot);
+  });
+
+  app.post<{
+    Body: { project?: string; topK?: number };
   }>("/api/memory-benchmark", async (req) => {
     const project = resolveProject(req.body.project);
-    return hybrid.runMemoryBenchmark(db, project);
+    return hybrid.runMemoryBenchmark(db, project, req.body.topK);
   });
 }

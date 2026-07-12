@@ -8,6 +8,9 @@
   let episodes = $state<Episode[]>([]);
   let memories = $state<SemanticMemory[]>([]);
   let conflicts = $state<MemoryConflict[]>([]);
+  let archivedMemories = $state<SemanticMemory[]>([]);
+  let lifecycleView = $state<"active" | "archived">("active");
+  let lifecycleBusy = $state<number | null>(null);
   let contextPack = $state<ContextPack | null>(null);
   let loading = $state(true);
   let episodeContent = $state("");
@@ -18,13 +21,16 @@
   async function loadAll(currentProject = project) {
     loading = true;
     try {
-      const [nextEpisodes, nextMemories, nextConflicts] = await Promise.all([
-        api.getEpisodes(currentProject),
-        api.getSemanticMemories(currentProject),
-        api.getMemoryConflicts(currentProject),
-      ]);
+      const [nextEpisodes, nextMemories, nextArchivedMemories, nextConflicts] =
+        await Promise.all([
+          api.getEpisodes(currentProject),
+          api.getSemanticMemories(currentProject, "active"),
+          api.getSemanticMemories(currentProject, "archived"),
+          api.getMemoryConflicts(currentProject),
+        ]);
       episodes = nextEpisodes;
       memories = nextMemories;
+      archivedMemories = nextArchivedMemories;
       conflicts = nextConflicts;
     } finally {
       loading = false;
@@ -53,6 +59,22 @@
     benchmarkReport = result.report;
     await loadAll();
   }
+
+  async function updateLifecycle(memory: SemanticMemory) {
+    lifecycleBusy = memory.id;
+    try {
+      const status = memory.lifecycleStatus === "active" ? "archived" : "active";
+      const reason = status === "archived" ? "Archived from web review" : undefined;
+      await api.setMemoryLifecycle(project, memory.id, status, reason);
+      await loadAll();
+    } finally {
+      lifecycleBusy = null;
+    }
+  }
+
+  const visibleMemories = $derived(
+    lifecycleView === "active" ? memories : archivedMemories
+  );
 
   onMount(() => {
     loadAll();
@@ -115,8 +137,23 @@
 {:else}
   <div class="grid">
     <section class="card">
-      <div class="card-title">Semantic Memories ({memories.length})</div>
-      {#each memories as memory (memory.id)}
+      <div class="flex memory-header">
+        <div class="card-title">Semantic Memories ({visibleMemories.length})</div>
+        <div class="flex" role="group" aria-label="Memory lifecycle filter">
+          <button
+            class:primary={lifecycleView === "active"}
+            onclick={() => (lifecycleView = "active")}>Active</button
+          >
+          <button
+            class:primary={lifecycleView === "archived"}
+            onclick={() => (lifecycleView = "archived")}>Archived</button
+          >
+        </div>
+      </div>
+      {#if visibleMemories.length === 0}
+        <div class="empty">No {lifecycleView} semantic memories.</div>
+      {/if}
+      {#each visibleMemories as memory (memory.id)}
         <div class="item">
           <div>
             <span class="tag">{memory.kind}</span>
@@ -124,9 +161,20 @@
             {memory.predicate}
           </div>
           <div>{memory.content}</div>
-          <div class="text-sm text-muted">
-            confidence {memory.confidence.toFixed(2)}, importance
-            {memory.importance.toFixed(2)}
+          <div class="flex memory-actions">
+            <div class="text-sm text-muted">
+              confidence {memory.confidence.toFixed(2)}, importance
+              {memory.importance.toFixed(2)}
+              {#if memory.archiveReason}
+                · {memory.archiveReason}
+              {/if}
+            </div>
+            <button
+              disabled={lifecycleBusy === memory.id}
+              onclick={() => updateLifecycle(memory)}
+            >
+              {memory.lifecycleStatus === "active" ? "Archive" : "Restore"}
+            </button>
           </div>
         </div>
       {/each}
@@ -168,6 +216,17 @@
   .item {
     border-top: 1px solid var(--border);
     padding: 12px 0;
+  }
+
+  .memory-header,
+  .memory-actions {
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .memory-actions {
+    margin-top: 8px;
   }
 
   pre {

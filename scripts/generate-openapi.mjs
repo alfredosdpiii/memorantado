@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 
 const outPath = path.resolve("docs/openapi.json");
+const packageJson = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8"));
 
 const operations = [
   ["get", "/api/health", "Health check"],
@@ -24,11 +25,20 @@ const operations = [
   ["post", "/api/episodes", "Append an episode and optionally extract memories"],
   ["get", "/api/episodes/{id}", "Read an episode"],
   ["post", "/api/episodes/{id}/extract", "Extract semantic memories"],
+  [
+    "post",
+    "/api/semantic-memories/{id}/lifecycle",
+    "Archive or restore a semantic memory",
+  ],
   ["get", "/api/semantic-memories", "List semantic memories"],
   ["post", "/api/semantic-memories", "Create or reinforce a semantic memory"],
   ["get", "/api/semantic-memories/{id}/explain", "Explain memory provenance"],
+  ["post", "/api/embeddings/backfill", "Backfill configured embeddings"],
   ["post", "/api/retrieve-context", "Retrieve a context pack"],
   ["get", "/api/memory-conflicts", "List memory conflicts"],
+  ["get", "/api/exchange/jsonl", "Export versioned memory JSONL"],
+  ["post", "/api/exchange/jsonl", "Import versioned memory JSONL"],
+  ["post", "/api/wiki/obsidian", "Build the Obsidian wiki projection"],
   ["post", "/api/memory-conflicts/{id}/resolve", "Resolve a memory conflict"],
   ["post", "/api/memory-benchmark", "Run local memory benchmark"],
 ];
@@ -104,7 +114,7 @@ const schema = {
   openapi: "3.1.0",
   info: {
     title: "memorantado REST API",
-    version: "0.1.7",
+    version: packageJson.version,
     description: "Local REST API used by the memorantado web UI.",
   },
   servers: [{ url: "http://127.0.0.1:3789" }],

@@ -1,11 +1,128 @@
 import type {
+  ClaimVersion,
+  ConflictResolutionEvent,
   Episode,
   MemoryConflict,
+  MemoryEvidence,
   MemoryStatus,
   MemoryScope,
   QueryIntent,
   SemanticMemory,
 } from "../memory/types.js";
+
+export type ClaimVersionRow = {
+  id: number;
+  memory_id: number;
+  project: string;
+  scope: string;
+  kind: string;
+  subject: string;
+  predicate: string;
+  object: string | null;
+  content: string;
+  confidence: number;
+  importance: number;
+  status: MemoryStatus;
+  valid_from: string | null;
+  valid_to: string | null;
+  recorded_at: string;
+  retracted_at: string | null;
+  supersedes_version_id: number | null;
+  metadata_json: string | null;
+  extractor_id: string;
+  extractor_version: string;
+};
+
+export type MemoryEvidenceRow = {
+  id: number;
+  claim_version_id: number;
+  episode_id: number;
+  quote: string;
+  span_start: number | null;
+  span_end: number | null;
+  content_hash: string;
+  polarity: "supports" | "contradicts" | "mentions";
+  actor: string | null;
+  source: string | null;
+  observed_at: string | null;
+  ingested_at: string;
+  extractor_id: string;
+  extractor_version: string;
+  created_at: string;
+};
+
+export type ConflictResolutionEventRow = {
+  id: number;
+  conflict_id: number;
+  project: string;
+  action: "resolved" | "ignored";
+  resolved_memory_id: number | null;
+  actor: string | null;
+  reason: string | null;
+  metadata_json: string | null;
+  created_at: string;
+};
+
+export function mapClaimVersion(row: ClaimVersionRow): ClaimVersion {
+  return {
+    id: row.id,
+    memoryId: row.memory_id,
+    project: row.project,
+    scope: normalizeScope(row.scope),
+    kind: row.kind,
+    subject: row.subject,
+    predicate: row.predicate,
+    object: row.object,
+    content: row.content,
+    confidence: row.confidence,
+    importance: row.importance,
+    status: row.status,
+    validFrom: row.valid_from,
+    validTo: row.valid_to,
+    recordedAt: row.recorded_at,
+    retractedAt: row.retracted_at,
+    supersedesVersionId: row.supersedes_version_id,
+    metadata: parseJson<Record<string, unknown>>(row.metadata_json),
+    extractorId: row.extractor_id,
+    extractorVersion: row.extractor_version,
+  };
+}
+
+export function mapMemoryEvidence(row: MemoryEvidenceRow): MemoryEvidence {
+  return {
+    id: row.id,
+    claimVersionId: row.claim_version_id,
+    episodeId: row.episode_id,
+    quote: row.quote,
+    spanStart: row.span_start,
+    spanEnd: row.span_end,
+    contentHash: row.content_hash,
+    polarity: row.polarity,
+    actor: row.actor,
+    source: row.source,
+    observedAt: row.observed_at,
+    ingestedAt: row.ingested_at,
+    extractorId: row.extractor_id,
+    extractorVersion: row.extractor_version,
+    createdAt: row.created_at,
+  };
+}
+
+export function mapResolutionEvent(
+  row: ConflictResolutionEventRow
+): ConflictResolutionEvent {
+  return {
+    id: row.id,
+    conflictId: row.conflict_id,
+    project: row.project,
+    action: row.action,
+    resolvedMemoryId: row.resolved_memory_id,
+    actor: row.actor,
+    reason: row.reason,
+    metadata: parseJson<Record<string, unknown>>(row.metadata_json),
+    createdAt: row.created_at,
+  };
+}
 
 export type EpisodeRow = {
   id: number;
@@ -36,9 +153,21 @@ export type SemanticMemoryRow = {
   last_confirmed_at: string | null;
   supersedes_id: number | null;
   metadata_json: string | null;
+  lifecycle_status?: "active" | "archived";
+  archive_reason?: string | null;
+  archived_at?: string | null;
   created_at: string;
   updated_at: string;
 };
+
+export const MEMORY_WITH_LIFECYCLE_SELECT = `
+  SELECT sm.*,
+         COALESCE(ml.status, 'active') AS lifecycle_status,
+         ml.reason AS archive_reason,
+         ml.archived_at
+  FROM semantic_memories sm
+  LEFT JOIN memory_lifecycle ml ON ml.memory_id = sm.id
+`;
 
 export type MemoryConflictRow = {
   id: number;
@@ -93,6 +222,9 @@ export function mapMemory(row: SemanticMemoryRow): SemanticMemory {
     lastConfirmedAt: row.last_confirmed_at,
     supersedesId: row.supersedes_id,
     metadata: parseJson<Record<string, unknown>>(row.metadata_json),
+    lifecycleStatus: row.lifecycle_status ?? "active",
+    archiveReason: row.archive_reason ?? null,
+    archivedAt: row.archived_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -113,22 +245,21 @@ export function mapConflict(row: MemoryConflictRow): MemoryConflict {
 }
 
 export function ftsQuery(query: string): string {
-  return query
-    .replace(/[^\w\s]/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
+  return significantWords(query)
     .map((word) => `"${word}"*`)
     .join(" OR ");
 }
-
 export function overlapScore(query: string, text: string): number {
-  const queryWords = new Set(query.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  const queryWords = new Set(significantWords(query));
   if (!queryWords.size) return 0;
-  const textWords = new Set(text.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  const textWords = new Set(significantWords(text));
   let matches = 0;
   for (const word of queryWords) if (textWords.has(word)) matches += 1;
   return matches / queryWords.size;
+}
+
+function significantWords(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((word) => word.length > 2);
 }
 
 export function estimateTokens(text: string): number {

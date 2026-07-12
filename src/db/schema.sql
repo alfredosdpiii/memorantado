@@ -145,6 +145,77 @@ CREATE TABLE IF NOT EXISTS benchmark_runs (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL,
+  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS claim_versions (
+  id                    INTEGER PRIMARY KEY,
+  memory_id             INTEGER NOT NULL REFERENCES semantic_memories(id) ON DELETE CASCADE,
+  project               TEXT NOT NULL,
+  scope                 TEXT NOT NULL,
+  kind                  TEXT NOT NULL,
+  subject               TEXT NOT NULL,
+  predicate             TEXT NOT NULL,
+  object                TEXT,
+  content               TEXT NOT NULL,
+  confidence            REAL NOT NULL,
+  importance            REAL NOT NULL,
+  status                TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'invalidated')),
+  valid_from            TEXT,
+  valid_to              TEXT,
+  recorded_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  retracted_at          TEXT,
+  supersedes_version_id INTEGER REFERENCES claim_versions(id) ON DELETE SET NULL,
+  metadata_json         TEXT,
+  extractor_id          TEXT NOT NULL DEFAULT 'manual',
+  extractor_version     TEXT NOT NULL DEFAULT '1'
+);
+
+CREATE TABLE IF NOT EXISTS memory_evidence (
+  id                INTEGER PRIMARY KEY,
+  claim_version_id  INTEGER NOT NULL REFERENCES claim_versions(id) ON DELETE CASCADE,
+  episode_id        INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  quote             TEXT NOT NULL,
+  span_start        INTEGER,
+  span_end          INTEGER,
+  content_hash      TEXT NOT NULL,
+  polarity          TEXT NOT NULL DEFAULT 'supports'
+                    CHECK (polarity IN ('supports', 'contradicts', 'mentions')),
+  actor             TEXT,
+  source            TEXT,
+  observed_at       TEXT,
+  ingested_at       TEXT NOT NULL,
+  extractor_id      TEXT NOT NULL,
+  extractor_version TEXT NOT NULL,
+  created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(claim_version_id, episode_id, span_start, span_end, polarity)
+);
+
+CREATE TABLE IF NOT EXISTS conflict_resolution_events (
+  id                 INTEGER PRIMARY KEY,
+  conflict_id        INTEGER NOT NULL REFERENCES memory_conflicts(id) ON DELETE CASCADE,
+  project            TEXT NOT NULL,
+  action             TEXT NOT NULL CHECK (action IN ('resolved', 'ignored')),
+  resolved_memory_id INTEGER REFERENCES semantic_memories(id) ON DELETE SET NULL,
+  actor              TEXT,
+  reason             TEXT,
+  metadata_json      TEXT,
+  created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS wiki_projection_state (
+  project      TEXT NOT NULL,
+  path         TEXT NOT NULL,
+  revision     TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY (project, path)
+);
+
+
 --------------------------------------------------------------------------------
 -- INDEXES
 --------------------------------------------------------------------------------
@@ -165,6 +236,14 @@ CREATE INDEX IF NOT EXISTS idx_memories_project_scope ON semantic_memories(proje
 CREATE INDEX IF NOT EXISTS idx_memory_sources_episode ON memory_sources(episode_id);
 CREATE INDEX IF NOT EXISTS idx_conflicts_project_status ON memory_conflicts(project, resolution_status);
 CREATE INDEX IF NOT EXISTS idx_aliases_project_canonical ON entity_aliases(project, canonical_name);
+CREATE INDEX IF NOT EXISTS idx_claim_versions_memory_recorded ON claim_versions(memory_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_claim_versions_project_status ON claim_versions(project, status);
+CREATE INDEX IF NOT EXISTS idx_claim_versions_project_valid ON claim_versions(project, valid_from, valid_to);
+CREATE INDEX IF NOT EXISTS idx_claim_versions_project_recorded ON claim_versions(project, recorded_at, retracted_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_claim_version ON memory_evidence(claim_version_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_episode ON memory_evidence(episode_id);
+CREATE INDEX IF NOT EXISTS idx_resolution_events_conflict ON conflict_resolution_events(conflict_id, created_at);
+
 
 --------------------------------------------------------------------------------
 -- FTS5 VIRTUAL TABLES
@@ -212,6 +291,29 @@ CREATE VIRTUAL TABLE IF NOT EXISTS semantic_memories_fts USING fts5(
   content,
   tokenize = 'porter'
 );
+
+CREATE VIRTUAL TABLE IF NOT EXISTS claim_versions_fts USING fts5(
+  project UNINDEXED,
+  scope UNINDEXED,
+  kind,
+  subject,
+  predicate,
+  object,
+  content,
+  tokenize = 'porter'
+);
+
+
+CREATE TABLE IF NOT EXISTS memory_lifecycle (
+  memory_id   INTEGER PRIMARY KEY REFERENCES semantic_memories(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  reason      TEXT,
+  archived_at TEXT,
+  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_lifecycle_status
+  ON memory_lifecycle(status, updated_at DESC);
 
 --------------------------------------------------------------------------------
 -- TRIGGERS: entities -> entities_fts
@@ -409,6 +511,39 @@ BEGIN
     new.predicate,
     COALESCE(new.object,''),
     new.content
+  );
+END;
+
+--------------------------------------------------------------------------------
+-- TRIGGERS: claim_versions -> claim_versions_fts
+--------------------------------------------------------------------------------
+
+CREATE TRIGGER IF NOT EXISTS claim_versions_ai
+AFTER INSERT ON claim_versions
+BEGIN
+  INSERT INTO claim_versions_fts(
+    rowid, project, scope, kind, subject, predicate, object, content
+  ) VALUES (
+    new.id, new.project, new.scope, new.kind, new.subject, new.predicate,
+    COALESCE(new.object,''), new.content
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS claim_versions_ad
+AFTER DELETE ON claim_versions
+BEGIN
+  DELETE FROM claim_versions_fts WHERE rowid = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS claim_versions_au
+AFTER UPDATE OF project, scope, kind, subject, predicate, object, content ON claim_versions
+BEGIN
+  DELETE FROM claim_versions_fts WHERE rowid = new.id;
+  INSERT INTO claim_versions_fts(
+    rowid, project, scope, kind, subject, predicate, object, content
+  ) VALUES (
+    new.id, new.project, new.scope, new.kind, new.subject, new.predicate,
+    COALESCE(new.object,''), new.content
   );
 END;
 

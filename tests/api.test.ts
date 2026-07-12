@@ -138,13 +138,43 @@ describe("API routes", () => {
       "sqlite"
     );
 
+    const memoryId = created.json<{ memories: Array<{ id: number }> }>().memories[0].id;
+    const archived = await app.inject({
+      headers: HOST_HEADER,
+      method: "POST",
+      payload: {
+        project: "api",
+        status: "archived",
+        reason: "superseded operational note",
+      },
+      url: `/api/semantic-memories/${memoryId}/lifecycle`,
+    });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json()).toMatchObject({
+      id: memoryId,
+      lifecycleStatus: "archived",
+    });
+
+    const afterArchive = await app.inject({
+      headers: HOST_HEADER,
+      method: "POST",
+      payload: { project: "api", query: "What does Ada prefer?" },
+      url: "/api/retrieve-context",
+    });
+    expect(afterArchive.json<{ memories: unknown[] }>().memories).toEqual([]);
+
     const benchmark = await app.inject({
       headers: HOST_HEADER,
       method: "POST",
-      payload: { project: "api" },
+      payload: { project: "api", topK: 5 },
       url: "/api/memory-benchmark",
     });
     expect(benchmark.statusCode).toBe(200);
-    expect(benchmark.json<{ metrics: { accuracy: number } }>().metrics.accuracy).toBe(1);
+    expect(
+      benchmark.json<{ name: string; metrics: { cases: number; recallAtK: number } }>()
+    ).toMatchObject({
+      name: "mutation-retrieval-v2",
+      metrics: { cases: 8 },
+    });
   });
 });

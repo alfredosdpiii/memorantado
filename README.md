@@ -6,12 +6,14 @@ Persistent local memory for AI agents via [Model Context Protocol (MCP)](https:/
 
 - **Knowledge Graph**: Entities with typed relationships and observations.
 - **Memory Timeline**: Append-only memory items with kind, title, tags, source, and content.
-- **Hybrid Memory**: Raw episodes, semantic memories, provenance links, conflict tracking, local embeddings, and ranked context packs.
-- **Full-Text Search**: FTS5-powered search across graph, timeline, episodes, and semantic memories.
-- **Local Retrieval**: Deterministic local hash embeddings with FTS and lexical overlap scoring.
+- **Hybrid Memory**: Raw episodes, semantic memories, evidence, bitemporal claim history, lifecycle controls, and conflict audit.
+- **Hybrid Retrieval**: FTS5 BM25, lexical overlap, local or opt-in Ollama embeddings, temporal filters, priors, and Reciprocal Rank Fusion.
+- **Evaluation**: Deterministic mutation benchmark with Recall, precision, F1, MRR, nDCG, temporal accuracy, stale leakage, and latency percentiles.
+- **Obsidian Wiki**: Deterministic one-way Markdown projection with stable IDs, history, evidence, conflicts, timeline pages, manifest, and Bases table.
+- **Interoperability**: Versioned JSONL export/import and read-only MCP resources for memories and episodes.
 - **Multi-Project**: Isolated namespaces via `project` parameters or `MEMORANTADO_PROJECT`.
-- **Web Dashboard**: Svelte 5 UI for search, graph browsing, timeline browsing, hybrid memory inspection, and benchmark runs.
-- **Local-Only Security**: Binds to `127.0.0.1` with host and origin validation.
+- **Web Dashboard**: Svelte 5 UI for search, graph browsing, lifecycle review, retrieval debugging, conflicts, and benchmarks.
+- **Local-Only Security**: Binds to `127.0.0.1` with host and origin validation; remote Ollama embedding endpoints are rejected.
 - **Agent-Ready Tooling**: MCP, REST API, OpenAPI generation, validation scripts, CI, and benchmark scripts.
 
 ## Installation
@@ -274,6 +276,8 @@ All tools accept an optional `project` parameter for namespace isolation. Defaul
 }
 ```
 
+Extraction is intentionally conservative: completion reports, validation chatter, and other operational status sentences are not promoted to durable semantic memories.
+
 #### retrieve_memory_context
 
 ```typescript
@@ -281,9 +285,14 @@ All tools accept an optional `project` parameter for namespace isolation. Defaul
   project?: string,
   query: string,
   limit?: number,
-  tokenBudget?: number
+  tokenBudget?: number,
+  mode?: "current" | "as_of" | "history" | "all",
+  asOf?: string,
+  recordedAt?: string
 }
 ```
+
+Use `set_memory_lifecycle` to archive or restore a memory without deleting its evidence or claim history.
 
 #### upsert_semantic_memory
 
@@ -302,6 +311,21 @@ All tools accept an optional `project` parameter for namespace isolation. Defaul
   metadata?: Record<string, unknown>
 }
 ```
+
+## CLI Operations
+
+```bash
+memorantado --help
+memorantado --version
+memorantado export-jsonl <PROJECT> > memories.jsonl
+memorantado import-jsonl <EMPTY_PROJECT> memories.jsonl
+memorantado wiki <PROJECT> [VAULT_ROOT]
+memorantado backfill-embeddings <PROJECT>
+```
+
+`wiki` defaults to `~/Documents/wiki` and atomically rebuilds its `Memorantado Generated` folder. SQLite remains canonical; generated Markdown is disposable and is never re-imported.
+
+The MCP server also exposes read-only resources at `memory://<PROJECT>/memories/<ID>` and `memory://<PROJECT>/episodes/<ID>`.
 
 ## Web UI
 
@@ -374,13 +398,19 @@ Important caveat: this script is not an official product benchmark run and must 
 
 ## Configuration
 
-| Environment Variable         | Default                             | Description                   |
-| ---------------------------- | ----------------------------------- | ----------------------------- |
-| `MEMORANTADO_PORT`           | `3789`                              | Server port                   |
-| `MEMORANTADO_DB`             | `~/.memorantado/memorantado.sqlite` | Database file path            |
-| `MEMORANTADO_PROJECT`        | `global`                            | Default MCP project namespace |
-| `MEMORANTADO_ENABLE_METRICS` | `true`                              | Enable `/api/metrics`         |
-| `LOG_LEVEL`                  | `info`                              | Fastify/Pino log level        |
+| Environment Variable                  | Default                             | Description                           |
+| ------------------------------------- | ----------------------------------- | ------------------------------------- |
+| `MEMORANTADO_PORT`                    | `3789`                              | Server port                           |
+| `MEMORANTADO_DB`                      | `~/.memorantado/memorantado.sqlite` | Database file path                    |
+| `MEMORANTADO_PROJECT`                 | `global`                            | Default MCP project namespace         |
+| `MEMORANTADO_ENABLE_METRICS`          | `true`                              | Enable `/api/metrics`                 |
+| `MEMORANTADO_EMBEDDING_PROVIDER`      | `local-hash`                        | `local-hash` or opt-in `ollama`       |
+| `MEMORANTADO_OLLAMA_URL`              | `http://127.0.0.1:11434`            | Loopback-only Ollama endpoint         |
+| `MEMORANTADO_OLLAMA_EMBED_MODEL`      | `embeddinggemma`                    | Ollama embedding model                |
+| `MEMORANTADO_OLLAMA_EMBED_DIMENSIONS` | model default                       | Optional positive embedding dimension |
+| `LOG_LEVEL`                           | `info`                              | Fastify/Pino log level                |
+
+After changing the embedding provider, model, or dimensions, run `memorantado backfill-embeddings <PROJECT>`.
 
 ## Development
 

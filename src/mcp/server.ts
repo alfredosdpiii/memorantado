@@ -1,10 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import * as exchange from "../db/exchange.js";
+import * as wiki from "../wiki/obsidian.js";
 import { z } from "zod";
 import type Database from "better-sqlite3";
 import { resolveProject } from "./project.js";
 import * as graph from "../db/graph.js";
 import * as hybrid from "../db/hybridMemory.js";
 import * as timeline from "../db/timeline.js";
+import { backfillConfiguredEmbeddings } from "../memory/embeddingBackfill.js";
+import { registerMemoryResources } from "./resources.js";
 
 type CreateMcpServerOpts = {
   defaultProject?: string;
@@ -18,8 +22,10 @@ export function createMcpServer(
 
   const server = new McpServer({
     name: "memorantado",
-    version: "0.1.2",
+    version: "0.2.1",
   });
+
+  registerMemoryResources(server, db);
 
   server.tool(
     "create_entities",
@@ -288,12 +294,18 @@ export function createMcpServer(
       query: z.string().min(1),
       limit: z.number().int().positive().max(50).optional(),
       tokenBudget: z.number().int().positive().max(12000).optional(),
+      mode: z.enum(["current", "as_of", "history", "all"]).optional(),
+      asOf: z.string().datetime().optional(),
+      recordedAt: z.string().datetime().optional(),
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = hybrid.retrieveContext(db, project, input.query, {
+      const result = await hybrid.retrieveContext(db, project, input.query, {
         limit: input.limit,
         tokenBudget: input.tokenBudget,
+        mode: input.mode,
+        asOf: input.asOf,
+        recordedAt: input.recordedAt,
       });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
@@ -323,6 +335,7 @@ export function createMcpServer(
     {
       project: z.string().optional(),
       status: z.enum(["active", "superseded", "invalidated"]).optional(),
+      lifecycleStatus: z.enum(["active", "archived"]).optional(),
       limit: z.number().int().positive().max(200).optional(),
       offset: z.number().int().nonnegative().optional(),
     },
@@ -330,6 +343,7 @@ export function createMcpServer(
       const project = resolveProject(input.project, defaultProject);
       const result = hybrid.listSemanticMemories(db, project, {
         status: input.status,
+        lifecycleStatus: input.lifecycleStatus,
         limit: input.limit,
         offset: input.offset,
       });
@@ -378,6 +392,27 @@ export function createMcpServer(
   );
 
   server.tool(
+    "set_memory_lifecycle",
+    {
+      project: z.string().optional(),
+      memoryId: z.number().int().positive(),
+      status: z.enum(["active", "archived"]),
+      reason: z.string().optional(),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = hybrid.setMemoryLifecycle(
+        db,
+        project,
+        input.memoryId,
+        input.status,
+        input.reason
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "list_memory_conflicts",
     {
       project: z.string().optional(),
@@ -397,6 +432,9 @@ export function createMcpServer(
       conflictId: z.number().int().positive(),
       resolvedMemoryId: z.number().int().positive().optional(),
       status: z.enum(["resolved", "ignored"]).default("resolved"),
+      actor: z.string().optional(),
+      reason: z.string().optional(),
+      metadata: z.record(z.unknown()).optional(),
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
@@ -405,8 +443,44 @@ export function createMcpServer(
         project,
         input.conflictId,
         input.resolvedMemoryId,
-        input.status
+        input.status,
+        { actor: input.actor, reason: input.reason, metadata: input.metadata }
       );
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "export_memory_jsonl",
+    { project: z.string().optional() },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = exchange.exportProjectJsonl(db, project);
+      return { content: [{ type: "text", text: result }] };
+    }
+  );
+
+  server.tool(
+    "import_memory_jsonl",
+    {
+      project: z.string().optional(),
+      jsonl: z.string().min(1),
+    },
+    async (input) => {
+      const result = exchange.importProjectJsonl(db, input.jsonl, input.project);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "build_obsidian_wiki",
+    {
+      project: z.string().optional(),
+      vaultRoot: z.string().min(1),
+    },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = wiki.buildObsidianWiki(db, project, input.vaultRoot);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -415,10 +489,21 @@ export function createMcpServer(
     "run_memory_benchmark",
     {
       project: z.string().optional(),
+      topK: z.number().int().positive().max(50).optional(),
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = await hybrid.runMemoryBenchmark(db, project);
+      const result = await hybrid.runMemoryBenchmark(db, project, input.topK);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "backfill_embeddings",
+    { project: z.string().optional() },
+    async (input) => {
+      const project = resolveProject(input.project, defaultProject);
+      const result = await backfillConfiguredEmbeddings(db, project);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );

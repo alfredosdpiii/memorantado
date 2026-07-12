@@ -51,6 +51,9 @@ export type SemanticMemory = {
   confidence: number;
   importance: number;
   status: string;
+  lifecycleStatus: "active" | "archived";
+  archiveReason: string | null;
+  archivedAt: string | null;
   updatedAt: string;
 };
 
@@ -219,8 +222,24 @@ export async function createEpisode(
   });
 }
 
-export async function getSemanticMemories(project: string): Promise<SemanticMemory[]> {
-  return request(`/api/semantic-memories?project=${encodeURIComponent(project)}`);
+export async function getSemanticMemories(
+  project: string,
+  lifecycleStatus: "active" | "archived" = "active"
+): Promise<SemanticMemory[]> {
+  const params = new URLSearchParams({ project, lifecycleStatus });
+  return request(`/api/semantic-memories?${params}`);
+}
+
+export async function setMemoryLifecycle(
+  project: string,
+  memoryId: number,
+  status: "active" | "archived",
+  reason?: string
+): Promise<SemanticMemory> {
+  return request(`/api/semantic-memories/${memoryId}/lifecycle`, {
+    method: "POST",
+    body: JSON.stringify({ project, status, reason }),
+  });
 }
 
 export async function createSemanticMemory(
@@ -254,14 +273,18 @@ export async function getMemoryConflicts(project: string): Promise<MemoryConflic
   return request(`/api/memory-conflicts?project=${encodeURIComponent(project)}`);
 }
 
-export async function runMemoryBenchmark(project: string): Promise<{
+export async function runMemoryBenchmark(
+  project: string,
+  topK = 5
+): Promise<{
   id: number;
   name: string;
   metrics: Record<string, number>;
+  cases: Array<Record<string, unknown>>;
   report: string;
 }> {
   return request("/api/memory-benchmark", {
     method: "POST",
-    body: JSON.stringify({ project }),
+    body: JSON.stringify({ project, topK }),
   });
 }

@@ -14,3 +14,7 @@ coverage/
 *.swp
 *.swo
 .claude/
+
+# Local analysis and package smoke-test artifacts
+.codebase-memory/
+*.tgz
