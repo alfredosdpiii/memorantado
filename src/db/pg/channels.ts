@@ -44,65 +44,166 @@ export function toPrefixTsquery(words: string[]): string {
 }
 
 // ---------------------------------------------------------------------------
-// bm25 channel (tsvector + ts_rank_cd; FTS5 counterpart documented in
-// retrieval.ts)
+// bm25 channel
+//
+// Replicates FTS5's bm25() scoring (sqlite3 ext/fts5) so the channel rank
+// order matches the sqlite backend:
+//   score(row) = sum over phrases of
+//     idf * (freq * (k1+1)) / (freq + k1 * (1 - b + b * D / avgdl))
+// with k1=1.2, b=0.75, idf = log((N - n + 0.5) / (n + 0.5)) clamped to 1e-6,
+// D = total token instances in the row, and N/avgdl over the whole table
+// (all projects/statuses, exactly like FTS5's docsize statistics). Documented
+// deviations: tokens come from pg's 'english' configuration (stopwords are
+// excluded from D/avgdl and phrase prefixes; FTS5's porter tokenizer indexes
+// stopwords and stems slightly differently).
 // ---------------------------------------------------------------------------
+
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+
+type FtsTable = "episodes" | "semantic_memories" | "claim_versions";
+
+type Bm25Phrase = { prefix: string; idf: number };
+
+async function bm25Phrases(
+  db: Queryable,
+  table: FtsTable,
+  words: string[],
+  rowCount: number
+): Promise<Bm25Phrase[]> {
+  const phrases: Bm25Phrase[] = [];
+  for (const word of words) {
+    // Doc frequency is whole-table (all projects/statuses), mirroring
+    // FTS5's xQueryPhrase count.
+    const { rows } = await db.query<{ tsq: string; n: number }>(
+      `SELECT to_tsquery('english', $1)::text AS tsq,
+              (SELECT count(*) FROM ${table}
+               WHERE search_vector @@ to_tsquery('english', $1)) AS n`,
+      [`'${word}':*`]
+    );
+    const prefix = parsePrefixTerm(rows[0].tsq);
+    // null: the word is a stopword under the 'english' configuration and
+    // was dropped from the query (documented deviation from FTS5).
+    if (prefix === null) continue;
+    const rawIdf = Math.log((rowCount - rows[0].n + 0.5) / (rows[0].n + 0.5));
+    phrases.push({ prefix, idf: rawIdf <= 0 ? 1e-6 : rawIdf });
+  }
+  return phrases;
+}
+
+/** Parses pg's normalized `'stem':*` form back into the stemmed prefix. */
+function parsePrefixTerm(tsqueryText: string): string | null {
+  const match = /^'([^']+)':\*$/.exec(tsqueryText.trim());
+  return match ? match[1] : null;
+}
+
+/**
+ * Scores every row matching the GIN-filtered @@ predicate with FTS5's exact
+ * bm25 formula (idf/avgdl are per-query constants; phrase frequencies and the
+ * row's token count are computed per row in SQL), then keeps the top `limit`
+ * by score with the id tie-break — the same channel rank list sqlite
+ * produces with bm25() ASC, id ASC.
+ */
+async function bm25Channel(
+  db: Queryable,
+  table: FtsTable,
+  filteredFromWhere: string,
+  filterParams: unknown[],
+  words: string[],
+  limit: number
+): Promise<Array<{ id: number; score: number }>> {
+  if (!words.length) return [];
+  const stats = await db.query<{ row_count: number; token_count: number }>(
+    `SELECT row_count, token_count FROM fts_stats WHERE table_name = $1`,
+    [table]
+  );
+  const rowCount = stats.rows[0]?.row_count ?? 0;
+  const tokenCount = stats.rows[0]?.token_count ?? 0;
+  if (!rowCount || !tokenCount) return [];
+  const avgdl = tokenCount / rowCount;
+  const phrases = await bm25Phrases(db, table, words, rowCount);
+  if (!phrases.length) return [];
+  const tsquery = phrases.map((phrase) => `'${phrase.prefix}':*`).join(" | ");
+  const prefixParams = phrases.map((phrase) => phrase.prefix);
+  const freqColumns = phrases
+    .map(
+      (_, index) =>
+        `tsvector_prefix_freq(t.search_vector, $${filterParams.length + 2 + index})::float8 ` +
+        `AS f${index}`
+    )
+    .join(", ");
+  const scoreTerms = phrases
+    .map((phrase, index) => {
+      const freq = `s.f${index}`;
+      return (
+        `(${phrase.idf} * (${freq} * ${BM25_K1 + 1}) / ` +
+        `(${freq} + ${BM25_K1} * (1 - ${BM25_B} + ${BM25_B} * s.search_length / ${avgdl})))`
+      );
+    })
+    .join(" + ");
+  const { rows } = await db.query<{ id: number; score: number }>(
+    `SELECT s.id, (${scoreTerms}) AS score
+     FROM (
+       SELECT t.id, t.search_length, ${freqColumns}
+       FROM ${filteredFromWhere}
+         AND t.search_vector @@ to_tsquery('english', $${filterParams.length + 1})
+     ) s
+     ORDER BY score DESC, s.id ASC
+     LIMIT $${filterParams.length + 2 + phrases.length}`,
+    [...filterParams, tsquery, ...prefixParams, limit]
+  );
+  return rows;
+}
 
 export async function searchMemoryFts(
   db: Queryable,
   project: string,
-  tsquery: string,
+  words: string[],
   limit: number
 ): Promise<Array<{ id: number; score: number }>> {
-  const { rows } = await db.query<{ id: number; score: number }>(
-    `SELECT sm.id, ts_rank_cd(sm.search_vector, q.query) AS score
-     FROM (SELECT to_tsquery('english', $2) AS query) q,
-          semantic_memories sm
-     LEFT JOIN memory_lifecycle ml ON ml.memory_id = sm.id
-     WHERE sm.project = $1 AND sm.status = 'active'
-       AND COALESCE(ml.status, 'active') = 'active'
-       AND sm.search_vector @@ q.query
-     ORDER BY score DESC, sm.id ASC
-     LIMIT $3`,
-    [project, tsquery, limit]
+  return bm25Channel(
+    db,
+    "semantic_memories",
+    `semantic_memories t
+     LEFT JOIN memory_lifecycle ml ON ml.memory_id = t.id
+     WHERE t.project = $1 AND t.status = 'active'
+       AND COALESCE(ml.status, 'active') = 'active'`,
+    [project],
+    words,
+    limit
   );
-  return rows;
 }
 
 export async function searchEpisodeFts(
   db: Queryable,
   project: string,
-  tsquery: string,
+  words: string[],
   limit: number
 ): Promise<Array<{ id: number; score: number }>> {
-  const { rows } = await db.query<{ id: number; score: number }>(
-    `SELECT e.id, ts_rank_cd(e.search_vector, q.query) AS score
-     FROM (SELECT to_tsquery('english', $2) AS query) q,
-          episodes e
-     WHERE e.project = $1 AND e.search_vector @@ q.query
-     ORDER BY score DESC, e.id ASC
-     LIMIT $3`,
-    [project, tsquery, limit]
+  return bm25Channel(
+    db,
+    "episodes",
+    `episodes t WHERE t.project = $1`,
+    [project],
+    words,
+    limit
   );
-  return rows;
 }
 
 export async function searchVersionFts(
   db: Queryable,
   project: string,
-  tsquery: string,
+  words: string[],
   limit: number
 ): Promise<Array<{ id: number; score: number }>> {
-  const { rows } = await db.query<{ id: number; score: number }>(
-    `SELECT cv.id, ts_rank_cd(cv.search_vector, q.query) AS score
-     FROM (SELECT to_tsquery('english', $2) AS query) q,
-          claim_versions cv
-     WHERE cv.project = $1 AND cv.search_vector @@ q.query
-     ORDER BY score DESC, cv.id ASC
-     LIMIT $3`,
-    [project, tsquery, limit]
+  return bm25Channel(
+    db,
+    "claim_versions",
+    `claim_versions t WHERE t.project = $1`,
+    [project],
+    words,
+    limit
   );
-  return rows;
 }
 
 export function ftsWords(query: string): string[] {

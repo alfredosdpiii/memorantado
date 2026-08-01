@@ -81,9 +81,9 @@ export async function importProjectJsonlPg(
     for (const type of EXPORT_TABLES) {
       for (const record of records.filter((candidate) => candidate.type === type)) {
         const row: Record<string, unknown> = { ...record.data };
-        // search_vector is a stored generated column on pg; it is derived on
-        // insert and must never be written explicitly.
+        // Generated columns on pg; derived on insert, never written.
         delete row.search_vector;
+        delete row.search_length;
         if ("project" in row) row.project = project;
         const columns = Object.keys(row);
         const placeholders = columns.map((_, index) => `$${index + 1}`).join(", ");
@@ -179,6 +179,7 @@ async function readProjectRows(
   return rows.map((row) => {
     const rest = { ...row };
     delete rest.search_vector;
+    delete rest.search_length;
     return rest;
   });
 }

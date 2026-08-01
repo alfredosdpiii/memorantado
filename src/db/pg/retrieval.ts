@@ -90,8 +90,8 @@ async function collectMemoryHits(
     return collectVersionHits(db, project, query, limit, temporal);
   }
   const queryEmbedding = await embedConfiguredText(query);
-  const tsquery = toPrefixTsquery(ftsWords(query));
-  const bm25 = tsquery ? await searchMemoryFts(db, project, tsquery, limit * 4) : [];
+  const words = ftsWords(query);
+  const bm25 = words.length ? await searchMemoryFts(db, project, words, limit * 4) : [];
   const vector =
     queryEmbedding.provider === "local-hash"
       ? await knnMemoryIds(db, project, queryEmbedding.vector, Math.max(limit * 4, 64))
@@ -159,9 +159,9 @@ async function collectVersionHits(
     MAX_TEMPORAL_SCAN
   );
   const byId = new Map(versions.map((version) => [version.id, version]));
-  const tsquery = toPrefixTsquery(ftsWords(query));
+  const words = ftsWords(query);
   const bm25 = (
-    tsquery ? await searchVersionFts(db, project, tsquery, limit * 4) : []
+    words.length ? await searchVersionFts(db, project, words, limit * 4) : []
   ).filter((entry) => byId.has(entry.id));
   const vector = (
     await knnClaimVersionIds(db, project, query, temporal, Math.max(limit * 4, 64))
@@ -213,8 +213,8 @@ async function collectEpisodeHits(
   limit: number
 ): Promise<RetrievalHit[]> {
   const queryEmbedding = await embedConfiguredText(query);
-  const tsquery = toPrefixTsquery(ftsWords(query));
-  const bm25 = tsquery ? await searchEpisodeFts(db, project, tsquery, limit * 4) : [];
+  const words = ftsWords(query);
+  const bm25 = words.length ? await searchEpisodeFts(db, project, words, limit * 4) : [];
   const vector =
     queryEmbedding.provider === "local-hash"
       ? await knnEpisodeIds(db, project, queryEmbedding.vector, Math.max(limit * 4, 64))
