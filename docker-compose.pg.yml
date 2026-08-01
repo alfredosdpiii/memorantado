@@ -1,0 +1,19 @@
+# Local Postgres + pgvector for the opt-in pg backend. Not required for the
+# default sqlite mode. Port 55432 avoids clashing with a postgres on 5432.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: memorantado
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memorantado"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    # throwaway data: tests and benchmarks provision/drop their own databases
+    tmpfs:
+      - /var/lib/postgresql/data

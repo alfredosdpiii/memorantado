@@ -42,6 +42,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:pg": "./scripts/test-pg.sh",
     "deadcode": "knip",
     "duplicates": "jscpd",
     "bench:memory": "tsx src/bench/memory.ts",
