@@ -258,7 +258,7 @@ export function overlapScore(query: string, text: string): number {
   return matches / queryWords.size;
 }
 
-function significantWords(text: string): string[] {
+export function significantWords(text: string): string[] {
   return (text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((word) => word.length > 2);
 }
 

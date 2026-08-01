@@ -1,14 +1,24 @@
 import type Database from "better-sqlite3";
 import { contentHash, embedText, embeddingDimension } from "../memory/localEmbedding.js";
 
+export type EmbeddingTarget = "memory" | "episode" | "claim_version";
+
+const TARGET_TABLES: Record<EmbeddingTarget, { table: string; column: string }> = {
+  memory: { table: "memory_embeddings", column: "memory_id" },
+  episode: { table: "episode_embeddings", column: "episode_id" },
+  claim_version: {
+    table: "claim_version_embeddings",
+    column: "claim_version_id",
+  },
+};
+
 export function upsertLocalEmbedding(
   db: Database.Database,
-  target: "memory" | "episode",
+  target: EmbeddingTarget,
   id: number,
   content: string
 ): void {
-  const table = target === "memory" ? "memory_embeddings" : "episode_embeddings";
-  const column = target === "memory" ? "memory_id" : "episode_id";
+  const { table, column } = TARGET_TABLES[target];
   const vector = embedText(content);
   db.prepare(
     `INSERT INTO ${table} (${column}, provider, dimension, vector_json, content_hash)

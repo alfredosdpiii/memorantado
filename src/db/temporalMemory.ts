@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { contentHash } from "../memory/localEmbedding.js";
+import { upsertLocalEmbedding } from "./embeddingStore.js";
 import type {
   CandidateMemory,
   ClaimVersion,
@@ -74,6 +75,9 @@ export function insertClaimVersion(
        WHERE id = ? AND retracted_at IS NULL`
     ).run(row.recorded_at, supersedesVersionId);
   }
+  // Embed once at write time (deterministic local hash) so retrieval never
+  // re-embeds historical content per query. Identical vectors as before.
+  upsertLocalEmbedding(db, "claim_version", row.id, row.content);
   return mapClaimVersion(row);
 }
 

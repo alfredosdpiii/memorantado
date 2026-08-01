@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { semanticConflictReason } from "../memory/conflicts.js";
+import { contentHash, embedText, embeddingDimension } from "../memory/localEmbedding.js";
 import { mapMemory, type SemanticMemoryRow } from "./hybridRows.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,7 +36,42 @@ const MIGRATIONS: Migration[] = [
       backfillMemoryLifecycle(db);
     },
   },
+  {
+    version: 4,
+    name: "claim-version-embeddings",
+    run(db) {
+      backfillClaimVersionEmbeddings(db);
+    },
+  },
 ];
+
+function backfillClaimVersionEmbeddings(db: Database.Database): void {
+  // Claim versions are embedded once at write time going forward; backfill the
+  // deterministic local-hash vector for any pre-existing version so retrieval
+  // never re-embeds historical content per query.
+  const rows = db
+    .prepare(
+      `SELECT cv.id, cv.content
+       FROM claim_versions cv
+       LEFT JOIN claim_version_embeddings cve ON cve.claim_version_id = cv.id
+       WHERE cve.claim_version_id IS NULL
+       ORDER BY cv.id`
+    )
+    .all() as Array<{ id: number; content: string }>;
+  const insert = db.prepare(
+    `INSERT INTO claim_version_embeddings (
+       claim_version_id, provider, dimension, vector_json, content_hash
+     ) VALUES (?, 'local-hash', ?, ?, ?)`
+  );
+  for (const row of rows) {
+    insert.run(
+      row.id,
+      embeddingDimension(),
+      JSON.stringify(embedText(row.content)),
+      contentHash(row.content)
+    );
+  }
+}
 function repairLegacyConflicts(db: Database.Database): void {
   const rows = db
     .prepare(

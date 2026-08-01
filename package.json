@@ -73,6 +73,7 @@
     "@modelcontextprotocol/sdk": "^1.25.0",
     "better-sqlite3": "^11.6.0",
     "fastify": "^5.1.0",
+    "pg": "^8.22.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
@@ -81,6 +82,7 @@
     "@tsconfig/svelte": "^5.0.0",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.20.3",
     "@vitest/coverage-v8": "^4.1.9",
     "eslint": "^9.39.4",
     "eslint-plugin-svelte": "^3.20.0",

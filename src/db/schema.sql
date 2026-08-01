@@ -174,6 +174,15 @@ CREATE TABLE IF NOT EXISTS claim_versions (
   extractor_version     TEXT NOT NULL DEFAULT '1'
 );
 
+CREATE TABLE IF NOT EXISTS claim_version_embeddings (
+  claim_version_id INTEGER PRIMARY KEY REFERENCES claim_versions(id) ON DELETE CASCADE,
+  provider     TEXT NOT NULL DEFAULT 'local-hash',
+  dimension    INTEGER NOT NULL,
+  vector_json  TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 CREATE TABLE IF NOT EXISTS memory_evidence (
   id                INTEGER PRIMARY KEY,
   claim_version_id  INTEGER NOT NULL REFERENCES claim_versions(id) ON DELETE CASCADE,

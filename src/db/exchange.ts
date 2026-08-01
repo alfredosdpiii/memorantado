@@ -183,4 +183,19 @@ function rebuildEmbeddings(db: Database.Database, project: string): void {
       contentHash(episode.content)
     );
   }
+  const versions = db
+    .prepare("SELECT id, content FROM claim_versions WHERE project = ?")
+    .all(project) as Array<{ id: number; content: string }>;
+  const versionInsert = db.prepare(
+    `INSERT INTO claim_version_embeddings (claim_version_id, provider, dimension, vector_json, content_hash)
+     VALUES (?, 'local-hash', ?, ?, ?)`
+  );
+  for (const version of versions) {
+    versionInsert.run(
+      version.id,
+      embeddingDimension(),
+      JSON.stringify(embedText(version.content)),
+      contentHash(version.content)
+    );
+  }
 }

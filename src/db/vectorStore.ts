@@ -1,9 +1,16 @@
 import type Database from "better-sqlite3";
 
+export type EmbeddingTable =
+  | "memory_embeddings"
+  | "episode_embeddings"
+  | "claim_version_embeddings";
+
+export type EmbeddingIdColumn = "memory_id" | "episode_id" | "claim_version_id";
+
 export function readStoredVector(
   db: Database.Database,
-  table: "memory_embeddings" | "episode_embeddings",
-  column: "memory_id" | "episode_id",
+  table: EmbeddingTable,
+  column: EmbeddingIdColumn,
   id: number,
   provider: string
 ): number[] | null {

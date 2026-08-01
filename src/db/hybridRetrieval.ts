@@ -208,7 +208,19 @@ function collectVersionHits(
   const vector = versions
     .map((version) => ({
       id: version.id,
-      score: cosineSimilarity(queryVector, embedLocalText(version.content)),
+      // Claim versions are embedded once at write time (and backfilled by
+      // migration 4). The fallback keeps parity for any pre-existing row
+      // that has no stored vector yet.
+      score: cosineSimilarity(
+        queryVector,
+        readStoredVector(
+          db,
+          "claim_version_embeddings",
+          "claim_version_id",
+          version.id,
+          "local-hash"
+        ) ?? embedLocalText(version.content)
+      ),
     }))
     .filter((entry) => entry.score >= MIN_VECTOR_RELEVANCE)
     .sort((left, right) => right.score - left.score || left.id - right.id);
