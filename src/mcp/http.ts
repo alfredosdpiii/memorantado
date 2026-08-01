@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import type Database from "better-sqlite3";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./server.js";
 import { InMemoryEventStore } from "./eventStore.js";
+import type { MemoryStore } from "../db/store.js";
 
 type RegisterMcpRoutesOpts = {
-  db: Database.Database;
+  store: MemoryStore;
   defaultProject?: string;
 };
 
@@ -96,7 +96,7 @@ export function registerMcpRoutes(
 
       const urlProject = (req.query as { project?: string }).project;
       const defaultProject = urlProject ?? globalDefaultProject;
-      const server = createMcpServer(opts.db, { defaultProject });
+      const server = createMcpServer(opts.store, { defaultProject });
       await server.connect(transport);
 
       reply.hijack();

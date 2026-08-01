@@ -1,19 +1,9 @@
-import Database from "better-sqlite3";
-import type Sqlite from "better-sqlite3";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  appendEpisode,
-  extractMemories,
-  retrieveContext,
-  upsertSemanticMemory,
-} from "../db/hybridMemory.js";
+import type { MemoryStore } from "../db/store.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BENCHMARK_NAME = "mutation-retrieval-v2";
 const BENCHMARK_PROJECT = "benchmark";
 const PREFIX = "mutation-v2";
+const NORMALIZED_TIMESTAMP = "2026-01-01T00:00:00.000Z";
 
 type RetrievalEvaluationMetrics = {
   cases: number;
@@ -72,73 +62,60 @@ export type RetrievalEvaluationResult = {
   report: string;
 };
 
+/**
+ * Runs the deterministic mutation-retrieval regression suite against an
+ * isolated scratch store (fixtures) while persisting run history on the
+ * provided main store. Backend-agnostic: both SqliteStore and PgStore supply
+ * a fresh scratch store so fixtures never touch real data.
+ */
 export async function runRetrievalEvaluation(
-  db: Sqlite.Database,
+  store: MemoryStore,
+  scratch: MemoryStore,
   project: string,
   topK = 5
 ): Promise<RetrievalEvaluationResult> {
-  const previousMetrics = readPreviousMetrics(db, project);
-  const benchmarkDb = new Database(":memory:");
-  benchmarkDb.pragma("foreign_keys = ON");
-  benchmarkDb.exec(fs.readFileSync(path.join(__dirname, "../db/schema.sql"), "utf8"));
-  try {
-    const cases = await buildMutationCases(benchmarkDb);
-    normalizeBenchmarkTimestamps(benchmarkDb);
-    const results = await Promise.all(
-      cases.map((fixture) => evaluateCase(benchmarkDb, fixture, topK))
-    );
-    const metrics = summarize(results);
-    const delta = previousMetrics ? metricDelta(metrics, previousMetrics) : null;
-    const report = renderReport(metrics, previousMetrics, delta, results, topK);
-    const row = db
-      .prepare(
-        `INSERT INTO benchmark_runs (project, name, metrics_json, report)
-         VALUES (?, ?, ?, ?) RETURNING id`
-      )
-      .get(project, BENCHMARK_NAME, JSON.stringify(metrics), report) as { id: number };
-    return {
-      id: row.id,
-      name: BENCHMARK_NAME,
-      metrics,
-      previousMetrics,
-      delta,
-      cases: results,
-      report,
-    };
-  } finally {
-    benchmarkDb.close();
-  }
-}
-
-function normalizeBenchmarkTimestamps(db: Sqlite.Database): void {
-  const timestamp = "2026-01-01T00:00:00.000Z";
-  db.prepare("UPDATE episodes SET created_at = ?").run(timestamp);
-  db.prepare(
-    "UPDATE semantic_memories SET created_at = ?, updated_at = ?, last_confirmed_at = ?"
-  ).run(timestamp, timestamp, timestamp);
-  db.prepare("UPDATE claim_versions SET recorded_at = ?").run(timestamp);
-  db.prepare("UPDATE memory_evidence SET created_at = ?, ingested_at = ?").run(
-    timestamp,
-    timestamp
+  const previousMetrics = await readPreviousMetrics(store, project);
+  const cases = await buildMutationCases(scratch);
+  await scratch.normalizeBenchmarkTimestamps(BENCHMARK_PROJECT, NORMALIZED_TIMESTAMP);
+  const results = await Promise.all(
+    cases.map((fixture) => evaluateCase(scratch, fixture, topK))
   );
+  const metrics = summarize(results);
+  const delta = previousMetrics ? metricDelta(metrics, previousMetrics) : null;
+  const report = renderReport(metrics, previousMetrics, delta, results, topK);
+  const id = await store.insertBenchmarkRun(
+    project,
+    BENCHMARK_NAME,
+    JSON.stringify(metrics),
+    report
+  );
+  return {
+    id,
+    name: BENCHMARK_NAME,
+    metrics,
+    previousMetrics,
+    delta,
+    cases: results,
+    report,
+  };
 }
 
 async function buildMutationCases(
-  db: Sqlite.Database
+  store: MemoryStore
 ): Promise<RetrievalEvaluationCase[]> {
   const evidenceText = `${PREFIX} evidence marker. Ada uses SQLite.`;
-  const episode = await appendEpisode(db, BENCHMARK_PROJECT, {
+  const episode = await store.appendEpisode(BENCHMARK_PROJECT, {
     actor: "Ada",
     content: evidenceText,
     source: "benchmark",
   });
-  const extracted = await extractMemories(db, BENCHMARK_PROJECT, episode.id);
+  const extracted = await store.extractMemories(BENCHMARK_PROJECT, episode.id);
   const evidenceMemory = extracted.find(
     (memory) => memory.content === "Ada uses SQLite."
   );
   if (!evidenceMemory) throw new Error("benchmark evidence memory was not extracted");
 
-  const historical = await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  const historical = await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     kind: "preference",
     subject: `${PREFIX}-Ada`,
     predicate: "prefers",
@@ -147,7 +124,7 @@ async function buildMutationCases(
     validFrom: "2024-01-01T00:00:00.000Z",
     validTo: "2025-01-01T00:00:00.000Z",
   });
-  const current = await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  const current = await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     kind: "preference",
     subject: `${PREFIX}-Ada`,
     predicate: "prefers",
@@ -155,28 +132,28 @@ async function buildMutationCases(
     content: `${PREFIX}-Ada prefers SQLite in 2025.`,
     validFrom: "2025-01-01T00:00:00.000Z",
   });
-  const structuredOld = await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  const structuredOld = await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     kind: "fact",
     subject: `${PREFIX}-deploy`,
     predicate: "region",
     object: "east",
     content: `${PREFIX}-deploy region is east.`,
   });
-  const structuredNew = await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  const structuredNew = await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     kind: "fact",
     subject: `${PREFIX}-deploy`,
     predicate: "region",
     object: "west",
     content: `${PREFIX}-deploy region is west.`,
   });
-  await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     subject: `${PREFIX}-distractor`,
     predicate: "states",
     content: `${PREFIX} SQLite appears in unrelated documentation for another entity.`,
     importance: 1,
     confidence: 1,
   });
-  await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     subject: `${PREFIX}-Ada`,
     predicate: "database",
     object: "MySQL",
@@ -185,13 +162,12 @@ async function buildMutationCases(
     confidence: 0.95,
   });
   const longEpisodeText = `${"Filler context. ".repeat(80)}Needle evidence: quartz-lantern.${" Trailing context.".repeat(40)}`;
-  const longEpisode = await appendEpisode(db, BENCHMARK_PROJECT, {
+  const longEpisode = await store.appendEpisode(BENCHMARK_PROJECT, {
     actor: "Ada",
     content: longEpisodeText,
     source: "benchmark-long",
   });
-  const budgetMemory = await upsertSemanticMemory(
-    db,
+  const budgetMemory = await store.upsertSemanticMemory(
     BENCHMARK_PROJECT,
     {
       subject: `${PREFIX}-budget`,
@@ -204,7 +180,7 @@ async function buildMutationCases(
       spanStart: longEpisodeText.indexOf("Needle evidence: quartz-lantern."),
     }
   );
-  const superseded = await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  const superseded = await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     kind: "fact",
     subject: `${PREFIX}-service`,
     predicate: "port",
@@ -213,32 +189,21 @@ async function buildMutationCases(
     confidence: 1,
     importance: 1,
   });
-  const replacement = await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  const replacement = await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     kind: "fact",
     subject: `${PREFIX}-service`,
     predicate: "port",
     object: "3789",
     content: `${PREFIX}-service port is 3789.`,
   });
-  const conflict = db
-    .prepare(
-      `SELECT id FROM memory_conflicts
-       WHERE project = ? AND memory_id = ? AND conflicting_id = ?`
-    )
-    .get(BENCHMARK_PROJECT, replacement.id, superseded.id) as { id: number };
-  const timestamp = "2026-01-01T00:00:00.000Z";
-  db.prepare(
-    `UPDATE semantic_memories SET status = 'superseded', updated_at = ? WHERE id = ?`
-  ).run(timestamp, superseded.id);
-  db.prepare(
-    `UPDATE claim_versions SET status = 'superseded', retracted_at = ?
-     WHERE memory_id = ? AND status = 'active'`
-  ).run(timestamp, superseded.id);
-  db.prepare(
-    `UPDATE memory_conflicts SET resolution_status = 'resolved', resolved_memory_id = ?,
-      resolved_at = ? WHERE id = ?`
-  ).run(replacement.id, timestamp, conflict.id);
-  const unrelated = await upsertSemanticMemory(db, BENCHMARK_PROJECT, {
+  const conflicts = await store.listConflicts(BENCHMARK_PROJECT, "open");
+  const conflict = conflicts.find(
+    (candidate) =>
+      candidate.memoryId === replacement.id && candidate.conflictingId === superseded.id
+  );
+  if (!conflict) throw new Error("benchmark conflict was not created");
+  await store.resolveConflict(BENCHMARK_PROJECT, conflict.id, replacement.id, "resolved");
+  const unrelated = await store.upsertSemanticMemory(BENCHMARK_PROJECT, {
     subject: `${PREFIX}-notes`,
     predicate: "states",
     content: `${PREFIX} validation passed.`,
@@ -309,11 +274,11 @@ async function buildMutationCases(
 }
 
 async function evaluateCase(
-  db: Sqlite.Database,
+  store: MemoryStore,
   fixture: RetrievalEvaluationCase,
   topK: number
 ): Promise<RetrievalEvaluationResult["cases"][number]> {
-  const pack = await retrieveContext(db, BENCHMARK_PROJECT, fixture.query, {
+  const pack = await store.retrieveContext(BENCHMARK_PROJECT, fixture.query, {
     limit: topK,
     mode: fixture.mode,
     asOf: fixture.asOf,
@@ -362,7 +327,7 @@ async function evaluateCase(
     staleLeakage: rankedMemoryIds.some((id) => stale.has(id)) ? 1 : 0,
     contradictionRetrieved: rankedMemoryIds.some((id) => conflicts.has(id)) ? 1 : 0,
     temporalCorrect: recall === 1 && !rankedMemoryIds.some((id) => stale.has(id)) ? 1 : 0,
-    evidenceCorrect: evidenceAccuracy(db, fixture),
+    evidenceCorrect: await evidenceAccuracy(store, fixture),
     estimatedTokens: pack.estimatedTokens,
   };
 }
@@ -404,39 +369,28 @@ function summarize(
   };
 }
 
-function evidenceAccuracy(
-  db: Sqlite.Database,
+async function evidenceAccuracy(
+  store: MemoryStore,
   fixture: RetrievalEvaluationCase
-): number | null {
+): Promise<number | null> {
   if (!fixture.expectedEvidence) return null;
-  const row = db
-    .prepare(
-      `SELECT me.quote, me.span_start
-       FROM memory_evidence me
-       JOIN claim_versions cv ON cv.id = me.claim_version_id
-       WHERE cv.project = ? AND cv.memory_id = ?
-       ORDER BY me.id DESC LIMIT 1`
-    )
-    .get(BENCHMARK_PROJECT, fixture.expectedEvidence.memoryId) as
-    | { quote: string; span_start: number | null }
-    | undefined;
+  const explanation = await store.explainMemory(
+    BENCHMARK_PROJECT,
+    fixture.expectedEvidence.memoryId
+  );
+  const row = explanation.evidence[0];
   return row?.quote === fixture.expectedEvidence.quote &&
-    row.span_start === fixture.expectedEvidence.spanStart
+    row?.spanStart === fixture.expectedEvidence.spanStart
     ? 1
     : 0;
 }
 
-function readPreviousMetrics(
-  db: Sqlite.Database,
+async function readPreviousMetrics(
+  store: MemoryStore,
   project: string
-): RetrievalEvaluationMetrics | null {
-  const row = db
-    .prepare(
-      `SELECT metrics_json FROM benchmark_runs
-       WHERE project = ? AND name = ? ORDER BY id DESC LIMIT 1`
-    )
-    .get(project, BENCHMARK_NAME) as { metrics_json: string } | undefined;
-  return row ? (JSON.parse(row.metrics_json) as RetrievalEvaluationMetrics) : null;
+): Promise<RetrievalEvaluationMetrics | null> {
+  const metricsJson = await store.readLatestBenchmarkMetrics(project, BENCHMARK_NAME);
+  return metricsJson ? (JSON.parse(metricsJson) as RetrievalEvaluationMetrics) : null;
 }
 
 function metricDelta(

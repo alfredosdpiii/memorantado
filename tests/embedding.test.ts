@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as hybrid from "../src/db/hybridMemory.js";
-import { backfillConfiguredEmbeddings } from "../src/memory/embeddingBackfill.js";
 import { embedText } from "../src/memory/embedding.js";
-import { createTestDb } from "./helpers.js";
+import { createTestStore, type TestStore } from "./helpers.js";
 
 const ORIGINAL_ENV = { ...process.env };
 
-afterEach(() => {
+const databases: TestStore[] = [];
+
+afterEach(async () => {
   process.env = { ...ORIGINAL_ENV };
   vi.unstubAllGlobals();
+  while (databases.length) await databases.pop()!.cleanup();
 });
 
 describe("embedding providers", () => {
@@ -40,28 +41,25 @@ describe("embedding providers", () => {
         );
       })
     );
-    const current = createTestDb();
-    try {
-      const relevant = hybrid.upsertSemanticMemory(current.db, "embedding", {
-        subject: "project",
-        content: "Project codename is quasar.",
-      });
-      hybrid.upsertSemanticMemory(current.db, "embedding", {
-        subject: "project",
-        content: "Project database is SQLite.",
-      });
+    const current = await createTestStore();
+    databases.push(current);
+    const relevant = await current.store.upsertSemanticMemory("embedding", {
+      subject: "project",
+      content: "Project codename is quasar.",
+    });
+    await current.store.upsertSemanticMemory("embedding", {
+      subject: "project",
+      content: "Project database is SQLite.",
+    });
 
-      const result = await backfillConfiguredEmbeddings(current.db, "embedding");
-      const pack = await hybrid.retrieveContext(current.db, "embedding", "quasar", {
-        limit: 2,
-      });
+    const result = await current.store.backfillConfiguredEmbeddings("embedding");
+    const pack = await current.store.retrieveContext("embedding", "quasar", {
+      limit: 2,
+    });
 
-      expect(result).toEqual({ provider: "ollama:test-embed", memories: 2, episodes: 0 });
-      expect(pack.memories[0].memory?.id).toBe(relevant.id);
-      expect(pack.memories[0].scoreParts).toMatchObject({ vector: 1 });
-    } finally {
-      current.cleanup();
-    }
+    expect(result).toEqual({ provider: "ollama:test-embed", memories: 2, episodes: 0 });
+    expect(pack.memories[0].memory?.id).toBe(relevant.id);
+    expect(pack.memories[0].scoreParts).toMatchObject({ vector: 1 });
   });
 
   it("rejects non-loopback Ollama endpoints", async () => {

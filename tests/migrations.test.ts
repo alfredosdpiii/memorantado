@@ -4,6 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { migrate } from "../src/db/migrate.js";
+import { STORE_KIND } from "./helpers.js";
 
 let dir: string | undefined;
 
@@ -12,7 +13,10 @@ afterEach(() => {
   dir = undefined;
 });
 
-describe("database migrations", () => {
+// These tests exercise sqlite-specific migration internals (schema_migrations
+// bookkeeping and legacy backfill repairs). The pg backend starts at the
+// current schema, so the suite is sqlite-only.
+describe.skipIf(STORE_KIND === "pg")("database migrations", () => {
   it("ignores legacy generic false conflicts and preserves structured conflicts", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "memorantado-migration-"));
     const db = new Database(path.join(dir, "test.sqlite"));

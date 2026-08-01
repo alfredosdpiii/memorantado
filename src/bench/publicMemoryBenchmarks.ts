@@ -1,14 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type Database from "better-sqlite3";
-import { openDb } from "../db/db.js";
-import { migrate } from "../db/migrate.js";
-import {
-  appendEpisode,
-  retrieveContext,
-  type AppendEpisodeInput,
-} from "../db/hybridMemory.js";
+import { openStore, resolveStoreKind, type MemoryStore } from "../db/store.js";
+import type { AppendEpisodeInput } from "../db/hybridMemory.js";
 import type { ContextPack, Episode } from "../memory/types.js";
 import { DATASET_URLS, STOPWORDS, TARGETS } from "./publicBenchmarkConfig.js";
 import type { SuiteName } from "./publicBenchmarkConfig.js";
@@ -68,14 +62,24 @@ function isSuiteName(value: string): value is SuiteName {
   return ["locomo", "longmemeval", "dmr", "ama"].includes(value);
 }
 
-function createBenchDb(): { db: Database.Database; cleanup: () => void } {
+async function createBenchStore(): Promise<{
+  store: MemoryStore;
+  cleanup: () => Promise<void>;
+}> {
+  if (resolveStoreKind() === "pg") {
+    const databaseUrl = process.env.MEMORANTADO_DATABASE_URL?.trim();
+    if (!databaseUrl) {
+      throw new Error("MEMORANTADO_DATABASE_URL is required when MEMORANTADO_STORE=pg");
+    }
+    const { createScratchPgStore } = await import("../db/pg/admin.js");
+    return createScratchPgStore(databaseUrl, "memorantado_bench_public");
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memorantado-bench-db-"));
-  const db = openDb(path.join(dir, "bench.sqlite"));
-  migrate(db);
+  const store = await openStore({ dbPath: path.join(dir, "bench.sqlite") });
   return {
-    db,
-    cleanup() {
-      db.close();
+    store,
+    async cleanup() {
+      await store.close();
       fs.rmSync(dir, { force: true, recursive: true });
     },
   };
@@ -96,12 +100,16 @@ async function cachedText(
   return text;
 }
 
-function append(db: Database.Database, project: string, input: AppendEpisodeInput): void {
-  appendEpisode(db, project, input);
+async function append(
+  store: MemoryStore,
+  project: string,
+  input: AppendEpisodeInput
+): Promise<void> {
+  await store.appendEpisode(project, input);
 }
 
 async function evaluate(
-  db: Database.Database,
+  store: MemoryStore,
   suite: SuiteName,
   project: string,
   id: string,
@@ -111,7 +119,7 @@ async function evaluate(
   evidenceIds: string[],
   opts: Options
 ): Promise<CaseResult> {
-  const pack = await retrieveContext(db, project, question, {
+  const pack = await store.retrieveContext(project, question, {
     limit: opts.topK,
     tokenBudget: opts.tokenBudget,
   });
@@ -132,14 +140,14 @@ async function evaluate(
   };
 }
 
-async function runLocomo(db: Database.Database, opts: Options): Promise<CaseResult[]> {
+async function runLocomo(store: MemoryStore, opts: Options): Promise<CaseResult[]> {
   const text = await cachedText(DATASET_URLS.locomo, opts.cacheDir, "locomo10.json");
   const rows = JSON.parse(text) as Record<string, unknown>[];
   const results: CaseResult[] = [];
   for (const [index, row] of rows.entries()) {
     const sampleId = stringField(row, "sample_id") || String(index);
     const project = `bench-locomo-${sampleId}`;
-    ingestLocomo(db, project, objectField(row, "conversation"));
+    await ingestLocomo(store, project, objectField(row, "conversation"));
     for (const qa of arrayField(row, "qa")) {
       if (limitReached(results, opts)) return results;
       const item = qa as Record<string, unknown>;
@@ -147,7 +155,7 @@ async function runLocomo(db: Database.Database, opts: Options): Promise<CaseResu
       if (!["1", "2", "3", "4"].includes(category)) continue;
       results.push(
         await evaluate(
-          db,
+          store,
           "locomo",
           project,
           stringField(item, "question_id") || String(results.length),
@@ -162,10 +170,7 @@ async function runLocomo(db: Database.Database, opts: Options): Promise<CaseResu
   }
   return results;
 }
-async function runLongMemEval(
-  db: Database.Database,
-  opts: Options
-): Promise<CaseResult[]> {
+async function runLongMemEval(store: MemoryStore, opts: Options): Promise<CaseResult[]> {
   const text = await cachedText(
     DATASET_URLS.longmemeval,
     opts.cacheDir,
@@ -177,10 +182,10 @@ async function runLongMemEval(
     if (limitReached(results, opts)) break;
     const id = stringField(row, "question_id") || String(index);
     const project = `bench-longmemeval-${index}`;
-    ingestLongMemEval(db, project, row);
+    await ingestLongMemEval(store, project, row);
     results.push(
       await evaluate(
-        db,
+        store,
         "longmemeval",
         project,
         id,
@@ -194,7 +199,7 @@ async function runLongMemEval(
   }
   return results;
 }
-async function runDmr(db: Database.Database, opts: Options): Promise<CaseResult[]> {
+async function runDmr(store: MemoryStore, opts: Options): Promise<CaseResult[]> {
   const text = await cachedText(
     DATASET_URLS.dmr,
     opts.cacheDir,
@@ -205,11 +210,11 @@ async function runDmr(db: Database.Database, opts: Options): Promise<CaseResult[
     if (limitReached(results, opts)) break;
     const row = JSON.parse(line) as Record<string, unknown>;
     const project = `bench-dmr-${index}`;
-    ingestDmr(db, project, row);
+    await ingestDmr(store, project, row);
     const instruction = objectField(row, "self_instruct");
     results.push(
       await evaluate(
-        db,
+        store,
         "dmr",
         project,
         String(index),
@@ -224,20 +229,20 @@ async function runDmr(db: Database.Database, opts: Options): Promise<CaseResult[
   return results;
 }
 
-async function runAma(db: Database.Database, opts: Options): Promise<CaseResult[]> {
+async function runAma(store: MemoryStore, opts: Options): Promise<CaseResult[]> {
   const text = await cachedText(DATASET_URLS.ama, opts.cacheDir, "ama_open_end_qa.jsonl");
   const results: CaseResult[] = [];
   for (const line of text.split("\n").filter(Boolean)) {
     if (limitReached(results, opts)) break;
     const row = JSON.parse(line) as Record<string, unknown>;
     const project = `bench-ama-${stringField(row, "episode_id")}`;
-    ingestAma(db, project, row);
+    await ingestAma(store, project, row);
     for (const qa of arrayField(row, "qa_pairs")) {
       if (limitReached(results, opts)) return results;
       const item = qa as Record<string, unknown>;
       results.push(
         await evaluate(
-          db,
+          store,
           "ama",
           project,
           stringField(item, "question_uuid") || String(results.length),
@@ -253,23 +258,23 @@ async function runAma(db: Database.Database, opts: Options): Promise<CaseResult[
   return results;
 }
 
-function ingestLocomo(
-  db: Database.Database,
+async function ingestLocomo(
+  store: MemoryStore,
   project: string,
   conversation: Record<string, unknown>
-): void {
+): Promise<void> {
   for (const [key, value] of Object.entries(conversation)) {
     if (!/^session_\d+$/.test(key)) continue;
     const date = stringField(conversation, `${key}_date_time`);
     const turns = value as Record<string, unknown>[];
-    append(db, project, {
+    await append(store, project, {
       content: `[${date}] ${key}\n${formatLocomoTurns(turns)}`,
       metadata: { benchmark: "locomo", session: key, date },
       source: "locomo",
     });
     for (const turn of turns) {
       const diaId = stringField(turn, "dia_id");
-      append(db, project, {
+      await append(store, project, {
         actor: stringField(turn, "speaker"),
         content: `[${date}] ${diaId} ${stringField(turn, "speaker")}: ${stringField(turn, "text")}`,
         metadata: { benchmark: "locomo", session: key, diaId, date },
@@ -279,19 +284,19 @@ function ingestLocomo(
   }
 }
 
-function ingestLongMemEval(
-  db: Database.Database,
+async function ingestLongMemEval(
+  store: MemoryStore,
   project: string,
   row: Record<string, unknown>
-): void {
+): Promise<void> {
   const sessions = arrayField(row, "haystack_sessions");
   const ids = stringArray(row.haystack_session_ids);
   const dates = stringArray(row.haystack_dates);
-  sessions.forEach((session, index) => {
+  for (const [index, session] of sessions.entries()) {
     const messages = session as Record<string, unknown>[];
     for (let offset = 0; offset < messages.length; offset += 2) {
       const pair = messages.slice(offset, offset + 2);
-      append(db, project, {
+      await append(store, project, {
         content: formatMessages(pair, dates[index], ids[index]),
         metadata: {
           benchmark: "longmemeval",
@@ -302,32 +307,32 @@ function ingestLongMemEval(
         source: "longmemeval",
       });
     }
-  });
+  }
 }
 
-function ingestDmr(
-  db: Database.Database,
+async function ingestDmr(
+  store: MemoryStore,
   project: string,
   row: Record<string, unknown>
-): void {
+): Promise<void> {
   for (const [sessionIndex, session] of arrayField(row, "previous_dialogs").entries()) {
-    appendDialog(db, project, session as Record<string, unknown>, sessionIndex);
+    await appendDialog(store, project, session as Record<string, unknown>, sessionIndex);
   }
-  append(db, project, {
+  await append(store, project, {
     content: formatDialog(arrayField(row, "dialog") as Record<string, unknown>[]),
     metadata: { benchmark: "dmr", sessionIndex: "current" },
     source: "dmr",
   });
 }
 
-function ingestAma(
-  db: Database.Database,
+async function ingestAma(
+  store: MemoryStore,
   project: string,
   row: Record<string, unknown>
-): void {
+): Promise<void> {
   for (const turn of arrayField(row, "trajectory")) {
     const item = turn as Record<string, unknown>;
-    append(db, project, {
+    await append(store, project, {
       content: `Step ${String(item.turn_idx)} action ${String(item.action)} observation ${String(item.observation)}`,
       metadata: {
         benchmark: "ama",
@@ -339,13 +344,13 @@ function ingestAma(
   }
 }
 
-function appendDialog(
-  db: Database.Database,
+async function appendDialog(
+  store: MemoryStore,
   project: string,
   session: Record<string, unknown>,
   sessionIndex: number
-): void {
-  append(db, project, {
+): Promise<void> {
+  await append(store, project, {
     content: formatDialog(arrayField(session, "dialog") as Record<string, unknown>[]),
     metadata: {
       benchmark: "dmr",
@@ -497,29 +502,29 @@ function stringArray(value: unknown): string[] {
 
 async function runSuite(
   suite: SuiteName,
-  db: Database.Database,
+  store: MemoryStore,
   opts: Options
 ): Promise<CaseResult[]> {
-  if (suite === "locomo") return runLocomo(db, opts);
-  if (suite === "longmemeval") return runLongMemEval(db, opts);
-  if (suite === "dmr") return runDmr(db, opts);
-  return runAma(db, opts);
+  if (suite === "locomo") return runLocomo(store, opts);
+  if (suite === "longmemeval") return runLongMemEval(store, opts);
+  if (suite === "dmr") return runDmr(store, opts);
+  return runAma(store, opts);
 }
 
 async function main(): Promise<void> {
   const opts = parseArgs();
-  const bench = createBenchDb();
+  const bench = await createBenchStore();
   try {
     const summaries: SuiteSummary[] = [];
     const details: CaseResult[] = [];
     for (const suite of opts.suites) {
-      const results = await runSuite(suite, bench.db, opts);
+      const results = await runSuite(suite, bench.store, opts);
       summaries.push(summarize(suite, results));
       details.push(...results);
     }
     console.log(JSON.stringify({ options: opts, summaries, details }, null, 2));
   } finally {
-    bench.cleanup();
+    await bench.cleanup();
   }
 }
 

@@ -1,26 +1,40 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type Database from "better-sqlite3";
-import { openDb } from "../src/db/db.js";
-import { migrate } from "../src/db/migrate.js";
+import { resolveStoreKind, type MemoryStore } from "../src/db/store.js";
+import { SqliteStore } from "../src/db/sqliteStore.js";
 
-export type TestDb = {
-  cleanup(): void;
-  db: Database.Database;
+export const STORE_KIND = resolveStoreKind();
+
+export type TestStore = {
+  cleanup(): Promise<void>;
+  store: MemoryStore;
 };
 
-export function createTestDb(): TestDb {
+/**
+ * Fresh isolated store per test. SQLite (default) uses a temp file like
+ * before; Postgres (MEMORANTADO_STORE=pg) provisions a throwaway database on
+ * the server pointed at by MEMORANTADO_DATABASE_URL and drops it on cleanup.
+ */
+export async function createTestStore(): Promise<TestStore> {
+  if (STORE_KIND === "pg") {
+    const databaseUrl = process.env.MEMORANTADO_DATABASE_URL?.trim();
+    if (!databaseUrl) {
+      throw new Error("MEMORANTADO_DATABASE_URL is required when MEMORANTADO_STORE=pg");
+    }
+    const { createScratchPgStore } = await import("../src/db/pg/admin.js");
+    const name = `memorantado_test_${randomBytes(8).toString("hex")}`;
+    return createScratchPgStore(databaseUrl, name);
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memorantado-test-"));
-  const db = openDb(path.join(dir, "test.sqlite"));
-  migrate(db);
-
+  const store = SqliteStore.create(path.join(dir, "test.sqlite"));
   return {
-    cleanup() {
-      db.close();
+    async cleanup() {
+      await store.close();
       fs.rmSync(dir, { force: true, recursive: true });
     },
-    db,
+    store,
   };
 }
 

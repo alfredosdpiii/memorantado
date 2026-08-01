@@ -1,11 +1,9 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
-import type Database from "better-sqlite3";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { openDb } from "./db/db.js";
-import { migrate } from "./db/migrate.js";
+import { openStore, type MemoryStore } from "./db/store.js";
 import {
   createMetrics,
   createRequestId,
@@ -25,7 +23,7 @@ const WEB_DIST = path.resolve(__dirname, "web");
 const STDIO_MODE = process.argv.includes("--stdio");
 
 type CreateHttpAppOpts = {
-  db?: Database.Database;
+  store?: MemoryStore;
   logger?: boolean | Record<string, unknown>;
   metrics?: HttpMetrics;
   port?: number;
@@ -34,10 +32,9 @@ type CreateHttpAppOpts = {
 };
 
 async function runStdioMode(): Promise<void> {
-  const db = openDb();
-  migrate(db);
+  const store = await openStore();
 
-  const server = createMcpServer(db, {});
+  const server = createMcpServer(store, {});
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -46,7 +43,7 @@ export async function createHttpApp(
   opts: CreateHttpAppOpts = {}
 ): Promise<FastifyInstance> {
   const port = opts.port ?? PORT;
-  const db = opts.db ?? openDb();
+  const store = opts.store ?? (await openStore());
   const metrics = opts.metrics ?? createMetrics();
   const app = Fastify({
     bodyLimit: 5 * 1024 * 1024,
@@ -67,18 +64,16 @@ export async function createHttpApp(
     requestIdHeader: "x-request-id",
   });
 
-  migrate(db);
-
-  if (!opts.db) {
+  if (!opts.store) {
     app.addHook("onClose", async () => {
-      db.close();
+      await store.close();
     });
   }
 
   installSecurity(app, { port });
   installObservability(app, { metrics });
-  registerMcpRoutes(app, { db });
-  registerApiRoutes(app, { db, metrics });
+  registerMcpRoutes(app, { store });
+  registerApiRoutes(app, { store, metrics });
 
   if (opts.serveStatic !== false) {
     await app.register(fastifyStatic, {

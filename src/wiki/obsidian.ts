@@ -1,10 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type Database from "better-sqlite3";
-import * as graph from "../db/graph.js";
-import * as hybrid from "../db/hybridMemory.js";
-import * as timeline from "../db/timeline.js";
+import type { MemoryStore } from "../db/store.js";
 
 export type WikiBuildResult = {
   project: string;
@@ -18,14 +15,14 @@ type GeneratedFile = {
   content: string;
 };
 
-export function buildObsidianWiki(
-  db: Database.Database,
+export async function buildObsidianWiki(
+  store: MemoryStore,
   project: string,
   vaultRoot: string
-): WikiBuildResult {
+): Promise<WikiBuildResult> {
   const root = path.resolve(vaultRoot, "Memorantado Generated");
   const generatedAt = new Date().toISOString();
-  const files = renderWiki(db, project, generatedAt);
+  const files = await renderWiki(store, project, generatedAt);
   const revision = createHash("sha256")
     .update(
       files
@@ -64,42 +61,47 @@ export function buildObsidianWiki(
     fs.rmSync(staging, { force: true, recursive: true });
     throw error;
   }
-  db.transaction(() => {
-    db.prepare("DELETE FROM wiki_projection_state WHERE project = ?").run(project);
-    const insert = db.prepare(
-      `INSERT INTO wiki_projection_state (project, path, revision, content_hash, generated_at)
-       VALUES (?, ?, ?, ?, ?)`
-    );
-    for (const file of files) {
-      insert.run(project, file.path, revision, sha256(file.content), generatedAt);
-    }
-  })();
+  await store.replaceWikiProjectionState(
+    project,
+    files.map((file) => ({
+      path: file.path,
+      revision,
+      contentHash: sha256(file.content),
+      generatedAt,
+    }))
+  );
   return { project, root, revision, files: files.map((file) => file.path) };
 }
 
-function renderWiki(
-  db: Database.Database,
+async function renderWiki(
+  store: MemoryStore,
   project: string,
   generatedAt: string
-): GeneratedFile[] {
+): Promise<GeneratedFile[]> {
   const files: GeneratedFile[] = [];
-  const memories = hybrid
-    .listSemanticMemories(db, project, { limit: 100_000 })
+  const memories = (await store.listSemanticMemories(project, { limit: 100_000 })).sort(
+    (left, right) => left.id - right.id
+  );
+  const episodes = (await store.listEpisodes(project, { limit: 100_000 })).sort(
+    (left, right) => left.id - right.id
+  );
+  const conflicts = (
+    await Promise.all(
+      ["open", "resolved", "ignored"].map((status) =>
+        store.listConflicts(project, status)
+      )
+    )
+  )
+    .flat()
     .sort((left, right) => left.id - right.id);
-  const episodes = hybrid
-    .listEpisodes(db, project, { limit: 100_000 })
-    .sort((left, right) => left.id - right.id);
-  const conflicts = ["open", "resolved", "ignored"]
-    .flatMap((status) => hybrid.listConflicts(db, project, status))
-    .sort((left, right) => left.id - right.id);
-  const memoryItems = timeline
-    .listMemoryItems(db, project, { limit: 100_000 })
-    .sort((left, right) => left.id - right.id);
-  const knowledge = graph.readGraph(db, project);
+  const memoryItems = (await store.listMemoryItems(project, { limit: 100_000 })).sort(
+    (left, right) => left.id - right.id
+  );
+  const knowledge = await store.readGraph(project);
   const entitySlugs = uniqueSlugs(knowledge.entities.map((entity) => entity.name));
 
   for (const memory of memories) {
-    const explanation = hybrid.explainMemory(db, project, memory.id);
+    const explanation = await store.explainMemory(project, memory.id);
     const sourceLinks = explanation.sources.map(
       (source) => `[[Sources/episode-${source.id}|episode ${source.id}]]`
     );

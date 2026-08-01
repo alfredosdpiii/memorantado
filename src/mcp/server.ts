@@ -1,13 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import * as exchange from "../db/exchange.js";
 import * as wiki from "../wiki/obsidian.js";
 import { z } from "zod";
-import type Database from "better-sqlite3";
 import { resolveProject } from "./project.js";
-import * as graph from "../db/graph.js";
-import * as hybrid from "../db/hybridMemory.js";
-import * as timeline from "../db/timeline.js";
-import { backfillConfiguredEmbeddings } from "../memory/embeddingBackfill.js";
+import type { MemoryStore } from "../db/store.js";
 import { registerMemoryResources } from "./resources.js";
 
 type CreateMcpServerOpts = {
@@ -15,7 +10,7 @@ type CreateMcpServerOpts = {
 };
 
 export function createMcpServer(
-  db: Database.Database,
+  store: MemoryStore,
   opts: CreateMcpServerOpts = {}
 ): McpServer {
   const { defaultProject } = opts;
@@ -25,7 +20,7 @@ export function createMcpServer(
     version: "0.2.1",
   });
 
-  registerMemoryResources(server, db);
+  registerMemoryResources(server, store);
 
   server.tool(
     "create_entities",
@@ -41,7 +36,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = graph.createEntities(db, project, input.entities);
+      const result = await store.createEntities(project, input.entities);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -60,7 +55,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = graph.createRelations(db, project, input.relations);
+      const result = await store.createRelations(project, input.relations);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -78,7 +73,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = graph.addObservations(db, project, input.observations);
+      const result = await store.addObservations(project, input.observations);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -91,7 +86,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      graph.deleteEntities(db, project, input.entityNames);
+      await store.deleteEntities(project, input.entityNames);
       return { content: [{ type: "text", text: "Deleted" }] };
     }
   );
@@ -109,7 +104,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      graph.deleteObservations(db, project, input.deletions);
+      await store.deleteObservations(project, input.deletions);
       return { content: [{ type: "text", text: "Deleted" }] };
     }
   );
@@ -128,7 +123,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      graph.deleteRelations(db, project, input.relations);
+      await store.deleteRelations(project, input.relations);
       return { content: [{ type: "text", text: "Deleted" }] };
     }
   );
@@ -140,7 +135,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = graph.readGraph(db, project);
+      const result = await store.readGraph(project);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -153,7 +148,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = graph.searchNodes(db, project, input.query);
+      const result = await store.searchNodes(project, input.query);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -166,7 +161,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = graph.openNodes(db, project, input.names);
+      const result = await store.openNodes(project, input.names);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -183,7 +178,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = timeline.appendMemoryItem(db, project, {
+      const result = await store.appendMemoryItem(project, {
         kind: input.kind,
         title: input.title,
         content: input.content,
@@ -205,7 +200,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = timeline.searchMemoryItems(db, project, input.query, {
+      const result = await store.searchMemoryItems(project, input.query, {
         kind: input.kind,
         limit: input.limit,
         offset: input.offset,
@@ -222,7 +217,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = timeline.getMemoryItem(db, project, input.id);
+      const result = await store.getMemoryItem(project, input.id);
       if (!result) {
         return { content: [{ type: "text", text: "Not found" }], isError: true };
       }
@@ -238,7 +233,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const deleted = timeline.deleteMemoryItem(db, project, input.id);
+      const deleted = await store.deleteMemoryItem(project, input.id);
       return { content: [{ type: "text", text: deleted ? "Deleted" : "Not found" }] };
     }
   );
@@ -257,7 +252,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const episode = hybrid.appendEpisode(db, project, {
+      const episode = await store.appendEpisode(project, {
         session: input.session,
         actor: input.actor,
         role: input.role,
@@ -266,7 +261,7 @@ export function createMcpServer(
         metadata: input.metadata,
       });
       const memories = input.extract
-        ? await hybrid.extractMemories(db, project, episode.id)
+        ? await store.extractMemories(project, episode.id)
         : [];
       return {
         content: [{ type: "text", text: JSON.stringify({ episode, memories }, null, 2) }],
@@ -282,7 +277,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = await hybrid.extractMemories(db, project, input.episodeId);
+      const result = await store.extractMemories(project, input.episodeId);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -300,7 +295,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = await hybrid.retrieveContext(db, project, input.query, {
+      const result = await store.retrieveContext(project, input.query, {
         limit: input.limit,
         tokenBudget: input.tokenBudget,
         mode: input.mode,
@@ -321,7 +316,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = hybrid.listEpisodes(db, project, {
+      const result = await store.listEpisodes(project, {
         session: input.session,
         limit: input.limit,
         offset: input.offset,
@@ -341,7 +336,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = hybrid.listSemanticMemories(db, project, {
+      const result = await store.listSemanticMemories(project, {
         status: input.status,
         lifecycleStatus: input.lifecycleStatus,
         limit: input.limit,
@@ -368,8 +363,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = hybrid.upsertSemanticMemory(
-        db,
+      const result = await store.upsertSemanticMemory(
         project,
         input,
         input.sourceEpisodeId
@@ -386,7 +380,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = hybrid.explainMemory(db, project, input.memoryId);
+      const result = await store.explainMemory(project, input.memoryId);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -401,8 +395,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = hybrid.setMemoryLifecycle(
-        db,
+      const result = await store.setMemoryLifecycle(
         project,
         input.memoryId,
         input.status,
@@ -420,7 +413,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = hybrid.listConflicts(db, project, input.status);
+      const result = await store.listConflicts(project, input.status);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -438,8 +431,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = hybrid.resolveConflict(
-        db,
+      const result = await store.resolveConflict(
         project,
         input.conflictId,
         input.resolvedMemoryId,
@@ -455,7 +447,7 @@ export function createMcpServer(
     { project: z.string().optional() },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = exchange.exportProjectJsonl(db, project);
+      const result = await store.exportProjectJsonl(project);
       return { content: [{ type: "text", text: result }] };
     }
   );
@@ -467,7 +459,7 @@ export function createMcpServer(
       jsonl: z.string().min(1),
     },
     async (input) => {
-      const result = exchange.importProjectJsonl(db, input.jsonl, input.project);
+      const result = await store.importProjectJsonl(input.jsonl, input.project);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -480,7 +472,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = wiki.buildObsidianWiki(db, project, input.vaultRoot);
+      const result = await wiki.buildObsidianWiki(store, project, input.vaultRoot);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -493,7 +485,7 @@ export function createMcpServer(
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = await hybrid.runMemoryBenchmark(db, project, input.topK);
+      const result = await store.runMemoryBenchmark(project, input.topK);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -503,7 +495,7 @@ export function createMcpServer(
     { project: z.string().optional() },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
-      const result = await backfillConfiguredEmbeddings(db, project);
+      const result = await store.backfillConfiguredEmbeddings(project);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );

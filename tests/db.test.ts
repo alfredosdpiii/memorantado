@@ -1,25 +1,23 @@
 import { afterEach, describe, expect, it } from "vitest";
-import * as graph from "../src/db/graph.js";
-import * as timeline from "../src/db/timeline.js";
-import { createTestDb, type TestDb } from "./helpers.js";
+import { createTestStore, type TestStore } from "./helpers.js";
 
-let current: TestDb | undefined;
+let current: TestStore | undefined;
 
-function db() {
-  current = createTestDb();
-  return current.db;
+async function store() {
+  current = await createTestStore();
+  return current.store;
 }
 
-afterEach(() => {
-  current?.cleanup();
+afterEach(async () => {
+  await current?.cleanup();
   current = undefined;
 });
 
 describe("graph storage", () => {
-  it("creates entities, observations, and relations", () => {
-    const database = db();
+  it("creates entities, observations, and relations", async () => {
+    const database = await store();
 
-    const entities = graph.createEntities(database, "test", [
+    const entities = await database.createEntities("test", [
       {
         name: "Ada",
         entityType: "person",
@@ -31,12 +29,12 @@ describe("graph storage", () => {
         observations: ["Stores durable context"],
       },
     ]);
-    graph.createRelations(database, "test", [
+    await database.createRelations("test", [
       { from: "Ada", to: "Memorantado", relationType: "uses" },
     ]);
 
     expect(entities).toHaveLength(2);
-    expect(graph.readGraph(database, "test")).toEqual({
+    expect(await database.readGraph("test")).toEqual({
       entities: [
         {
           name: "Ada",
@@ -53,13 +51,13 @@ describe("graph storage", () => {
     });
   });
 
-  it("searches matching entities and observations", () => {
-    const database = db();
-    graph.createEntities(database, "test", [
+  it("searches matching entities and observations", async () => {
+    const database = await store();
+    await database.createEntities("test", [
       { name: "Ada", entityType: "person", observations: ["Prefers SQLite"] },
     ]);
 
-    const result = graph.searchNodes(database, "test", "sqlite");
+    const result = await database.searchNodes("test", "sqlite");
 
     expect(result.entities).toEqual([
       {
@@ -72,9 +70,9 @@ describe("graph storage", () => {
 });
 
 describe("memory timeline", () => {
-  it("appends, searches, reads, and deletes memory items", () => {
-    const database = db();
-    const item = timeline.appendMemoryItem(database, "test", {
+  it("appends, searches, reads, and deletes memory items", async () => {
+    const database = await store();
+    const item = await database.appendMemoryItem("test", {
       kind: "decision",
       title: "Use SQLite",
       content: "Keep local storage simple",
@@ -82,11 +80,9 @@ describe("memory timeline", () => {
       source: "test",
     });
 
-    expect(timeline.searchMemoryItems(database, "test", "storage simple")).toHaveLength(
-      1
-    );
-    expect(timeline.getMemoryItem(database, "test", item.id)?.tags).toEqual(["storage"]);
-    expect(timeline.deleteMemoryItem(database, "test", item.id)).toBe(true);
-    expect(timeline.getMemoryItem(database, "test", item.id)).toBeNull();
+    expect(await database.searchMemoryItems("test", "storage simple")).toHaveLength(1);
+    expect((await database.getMemoryItem("test", item.id))?.tags).toEqual(["storage"]);
+    expect(await database.deleteMemoryItem("test", item.id)).toBe(true);
+    expect(await database.getMemoryItem("test", item.id)).toBeNull();
   });
 });

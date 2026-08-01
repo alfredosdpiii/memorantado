@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { createHttpApp } from "../src/main.js";
-import { createTestDb, HOST_HEADER, type TestDb } from "./helpers.js";
+import { createTestStore, HOST_HEADER, type TestStore } from "./helpers.js";
 
 let app: FastifyInstance;
-let testDb: TestDb;
+let testStore: TestStore;
 
 beforeEach(async () => {
-  testDb = createTestDb();
+  testStore = await createTestStore();
   app = await createHttpApp({
-    db: testDb.db,
+    store: testStore.store,
     logger: false,
     serveStatic: false,
   });
@@ -18,7 +18,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close();
-  testDb.cleanup();
+  await testStore.cleanup();
 });
 
 describe("API routes", () => {

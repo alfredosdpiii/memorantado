@@ -1,17 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import * as exchange from "../db/exchange.js";
 import * as wiki from "../wiki/obsidian.js";
-import type Database from "better-sqlite3";
 import { resolveProject } from "../mcp/project.js";
 import { isFeatureEnabled } from "../featureFlags.js";
 import type { HttpMetrics } from "../observability.js";
-import * as graph from "../db/graph.js";
-import * as hybrid from "../db/hybridMemory.js";
-import * as timeline from "../db/timeline.js";
-import { backfillConfiguredEmbeddings } from "../memory/embeddingBackfill.js";
+import type { MemoryStore } from "../db/store.js";
+import type { CandidateMemory } from "../memory/types.js";
 
 type RegisterApiRoutesOpts = {
-  db: Database.Database;
+  store: MemoryStore;
   metrics: HttpMetrics;
 };
 
@@ -19,7 +15,7 @@ export function registerApiRoutes(
   app: FastifyInstance,
   opts: RegisterApiRoutesOpts
 ): void {
-  const { db, metrics } = opts;
+  const { store, metrics } = opts;
 
   app.get("/api/health", async () => {
     return {
@@ -37,7 +33,7 @@ export function registerApiRoutes(
   }
 
   app.get("/api/projects", async () => {
-    const projects = timeline.getProjects(db);
+    const projects = await store.getProjects();
     return { projects };
   });
 
@@ -51,8 +47,8 @@ export function registerApiRoutes(
       return { entities: [], relations: [], memoryItems: [] };
     }
 
-    const graphResult = graph.searchNodes(db, project, q);
-    const memoryItems = timeline.searchMemoryItems(db, project, q, { limit: 50 });
+    const graphResult = await store.searchNodes(project, q);
+    const memoryItems = await store.searchMemoryItems(project, q, { limit: 50 });
 
     return {
       entities: graphResult.entities,
@@ -65,7 +61,7 @@ export function registerApiRoutes(
     Querystring: { project?: string };
   }>("/api/graph", async (req) => {
     const project = resolveProject(req.query.project);
-    return graph.readGraph(db, project);
+    return store.readGraph(project);
   });
 
   app.get<{
@@ -73,7 +69,7 @@ export function registerApiRoutes(
     Querystring: { project?: string };
   }>("/api/entity/:name", async (req, reply) => {
     const project = resolveProject(req.query.project);
-    const entity = graph.getEntityByName(db, project, req.params.name);
+    const entity = await store.getEntityByName(project, req.params.name);
 
     if (!entity) {
       reply.code(404);
@@ -92,7 +88,7 @@ export function registerApiRoutes(
     };
   }>("/api/entity", async (req) => {
     const project = resolveProject(req.body.project);
-    const result = graph.createEntities(db, project, [
+    const result = await store.createEntities(project, [
       {
         name: req.body.name,
         entityType: req.body.entityType,
@@ -107,7 +103,7 @@ export function registerApiRoutes(
     Body: { project?: string; content: string };
   }>("/api/entity/:name/observations", async (req, reply) => {
     const project = resolveProject(req.body.project);
-    const result = graph.addObservations(db, project, [
+    const result = await store.addObservations(project, [
       { entityName: req.params.name, contents: [req.body.content] },
     ]);
 
@@ -123,7 +119,7 @@ export function registerApiRoutes(
     Params: { id: string };
   }>("/api/observation/:id", async (req) => {
     const id = parseInt(req.params.id, 10);
-    graph.deleteObservationById(db, id);
+    await store.deleteObservationById(id);
     return { deleted: true };
   });
 
@@ -136,8 +132,7 @@ export function registerApiRoutes(
     };
   }>("/api/relation", async (req, reply) => {
     const project = resolveProject(req.body.project);
-    const result = graph.createRelationDirect(
-      db,
+    const result = await store.createRelationDirect(
       project,
       req.body.from,
       req.body.to,
@@ -156,7 +151,7 @@ export function registerApiRoutes(
     Params: { id: string };
   }>("/api/relation/:id", async (req) => {
     const id = parseInt(req.params.id, 10);
-    graph.deleteRelationById(db, id);
+    await store.deleteRelationById(id);
     return { deleted: true };
   });
 
@@ -176,9 +171,9 @@ export function registerApiRoutes(
     const offset = req.query.offset ? parseInt(req.query.offset, 10) : 0;
 
     if (q) {
-      return timeline.searchMemoryItems(db, project, q, { kind, limit, offset });
+      return store.searchMemoryItems(project, q, { kind, limit, offset });
     }
-    return timeline.listMemoryItems(db, project, { kind, limit, offset });
+    return store.listMemoryItems(project, { kind, limit, offset });
   });
 
   app.post<{
@@ -192,7 +187,7 @@ export function registerApiRoutes(
     };
   }>("/api/memory-items", async (req) => {
     const project = resolveProject(req.body.project);
-    return timeline.appendMemoryItem(db, project, {
+    return store.appendMemoryItem(project, {
       kind: req.body.kind,
       title: req.body.title,
       content: req.body.content,
@@ -207,7 +202,7 @@ export function registerApiRoutes(
   }>("/api/memory-items/:id", async (req, reply) => {
     const project = resolveProject(req.query.project);
     const id = parseInt(req.params.id, 10);
-    const item = timeline.getMemoryItem(db, project, id);
+    const item = await store.getMemoryItem(project, id);
 
     if (!item) {
       reply.code(404);
@@ -223,7 +218,7 @@ export function registerApiRoutes(
   }>("/api/memory-items/:id", async (req) => {
     const project = resolveProject(req.query.project);
     const id = parseInt(req.params.id, 10);
-    const deleted = timeline.deleteMemoryItem(db, project, id);
+    const deleted = await store.deleteMemoryItem(project, id);
     return { deleted };
   });
 
@@ -231,7 +226,7 @@ export function registerApiRoutes(
     Querystring: { project?: string; session?: string; limit?: string; offset?: string };
   }>("/api/episodes", async (req) => {
     const project = resolveProject(req.query.project);
-    return hybrid.listEpisodes(db, project, {
+    return store.listEpisodes(project, {
       session: req.query.session,
       limit: req.query.limit ? parseInt(req.query.limit, 10) : 50,
       offset: req.query.offset ? parseInt(req.query.offset, 10) : 0,
@@ -251,7 +246,7 @@ export function registerApiRoutes(
     };
   }>("/api/episodes", async (req) => {
     const project = resolveProject(req.body.project);
-    const episode = hybrid.appendEpisode(db, project, {
+    const episode = await store.appendEpisode(project, {
       session: req.body.session,
       actor: req.body.actor,
       role: req.body.role,
@@ -260,7 +255,7 @@ export function registerApiRoutes(
       metadata: req.body.metadata,
     });
     const memories = req.body.extract
-      ? await hybrid.extractMemories(db, project, episode.id)
+      ? await store.extractMemories(project, episode.id)
       : [];
     return { episode, memories };
   });
@@ -270,7 +265,7 @@ export function registerApiRoutes(
     Querystring: { project?: string };
   }>("/api/episodes/:id", async (req, reply) => {
     const project = resolveProject(req.query.project);
-    const episode = hybrid.getEpisode(db, project, parseInt(req.params.id, 10));
+    const episode = await store.getEpisode(project, parseInt(req.params.id, 10));
     if (!episode) {
       reply.code(404);
       return { error: "not_found" };
@@ -284,7 +279,7 @@ export function registerApiRoutes(
   }>("/api/episodes/:id/extract", async (req) => {
     const project = resolveProject(req.body.project);
     return {
-      memories: await hybrid.extractMemories(db, project, parseInt(req.params.id, 10)),
+      memories: await store.extractMemories(project, parseInt(req.params.id, 10)),
     };
   });
 
@@ -298,7 +293,7 @@ export function registerApiRoutes(
     };
   }>("/api/semantic-memories", async (req) => {
     const project = resolveProject(req.query.project);
-    return hybrid.listSemanticMemories(db, project, {
+    return store.listSemanticMemories(project, {
       status: req.query.status,
       lifecycleStatus: req.query.lifecycleStatus,
       limit: req.query.limit ? parseInt(req.query.limit, 10) : 100,
@@ -307,13 +302,13 @@ export function registerApiRoutes(
   });
 
   app.post<{
-    Body: Parameters<typeof hybrid.upsertSemanticMemory>[2] & {
+    Body: CandidateMemory & {
       project?: string;
       sourceEpisodeId?: number;
     };
   }>("/api/semantic-memories", async (req) => {
     const project = resolveProject(req.body.project);
-    return hybrid.upsertSemanticMemory(db, project, req.body, req.body.sourceEpisodeId);
+    return store.upsertSemanticMemory(project, req.body, req.body.sourceEpisodeId);
   });
 
   app.get<{
@@ -321,7 +316,7 @@ export function registerApiRoutes(
     Querystring: { project?: string };
   }>("/api/semantic-memories/:id/explain", async (req) => {
     const project = resolveProject(req.query.project);
-    return hybrid.explainMemory(db, project, parseInt(req.params.id, 10));
+    return store.explainMemory(project, parseInt(req.params.id, 10));
   });
 
   app.post<{
@@ -333,8 +328,7 @@ export function registerApiRoutes(
     };
   }>("/api/semantic-memories/:id/lifecycle", async (req, reply) => {
     const project = resolveProject(req.body.project);
-    const memory = hybrid.setMemoryLifecycle(
-      db,
+    const memory = await store.setMemoryLifecycle(
       project,
       parseInt(req.params.id, 10),
       req.body.status,
@@ -359,7 +353,7 @@ export function registerApiRoutes(
     };
   }>("/api/retrieve-context", async (req) => {
     const project = resolveProject(req.body.project);
-    return hybrid.retrieveContext(db, project, req.body.query, {
+    return store.retrieveContext(project, req.body.query, {
       limit: req.body.limit,
       tokenBudget: req.body.tokenBudget,
       mode: req.body.mode,
@@ -372,14 +366,14 @@ export function registerApiRoutes(
     Body: { project?: string };
   }>("/api/embeddings/backfill", async (req) => {
     const project = resolveProject(req.body.project);
-    return backfillConfiguredEmbeddings(db, project);
+    return store.backfillConfiguredEmbeddings(project);
   });
 
   app.get<{
     Querystring: { project?: string; status?: string };
   }>("/api/memory-conflicts", async (req) => {
     const project = resolveProject(req.query.project);
-    return hybrid.listConflicts(db, project, req.query.status ?? "open");
+    return store.listConflicts(project, req.query.status ?? "open");
   });
 
   app.post<{
@@ -394,8 +388,7 @@ export function registerApiRoutes(
     };
   }>("/api/memory-conflicts/:id/resolve", async (req) => {
     const project = resolveProject(req.body.project);
-    return hybrid.resolveConflict(
-      db,
+    return store.resolveConflict(
       project,
       parseInt(req.params.id, 10),
       req.body.resolvedMemoryId,
@@ -413,26 +406,26 @@ export function registerApiRoutes(
   }>("/api/exchange/jsonl", async (req, reply) => {
     const project = resolveProject(req.query.project);
     reply.type("application/x-ndjson");
-    return exchange.exportProjectJsonl(db, project);
+    return store.exportProjectJsonl(project);
   });
 
   app.post<{
     Body: { project?: string; jsonl: string };
   }>("/api/exchange/jsonl", async (req) => {
-    return exchange.importProjectJsonl(db, req.body.jsonl, req.body.project);
+    return store.importProjectJsonl(req.body.jsonl, req.body.project);
   });
 
   app.post<{
     Body: { project?: string; vaultRoot: string };
   }>("/api/wiki/obsidian", async (req) => {
     const project = resolveProject(req.body.project);
-    return wiki.buildObsidianWiki(db, project, req.body.vaultRoot);
+    return wiki.buildObsidianWiki(store, project, req.body.vaultRoot);
   });
 
   app.post<{
     Body: { project?: string; topK?: number };
   }>("/api/memory-benchmark", async (req) => {
     const project = resolveProject(req.body.project);
-    return hybrid.runMemoryBenchmark(db, project, req.body.topK);
+    return store.runMemoryBenchmark(project, req.body.topK);
   });
 }

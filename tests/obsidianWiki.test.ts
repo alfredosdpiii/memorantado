@@ -2,16 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import * as graph from "../src/db/graph.js";
-import * as hybrid from "../src/db/hybridMemory.js";
 import * as wiki from "../src/wiki/obsidian.js";
-import { createTestDb, type TestDb } from "./helpers.js";
+import { createTestStore, type TestStore } from "./helpers.js";
 
-let current: TestDb | undefined;
+let current: TestStore | undefined;
 let vault: string | undefined;
 
-afterEach(() => {
-  current?.cleanup();
+afterEach(async () => {
+  await current?.cleanup();
   current = undefined;
   if (vault) fs.rmSync(vault, { force: true, recursive: true });
   vault = undefined;
@@ -19,19 +17,20 @@ afterEach(() => {
 
 describe("Obsidian projection", () => {
   it("rebuilds a generated folder and removes stale generated files", async () => {
-    current = createTestDb();
+    current = await createTestStore();
+    const store = current.store;
     vault = fs.mkdtempSync(path.join(os.tmpdir(), "memorantado-vault-"));
-    graph.createEntities(current.db, "wiki", [
+    await store.createEntities("wiki", [
       { name: "Ada Lovelace", entityType: "person", observations: ["Prefers SQLite"] },
     ]);
-    const episode = hybrid.appendEpisode(current.db, "wiki", {
+    const episode = await store.appendEpisode("wiki", {
       actor: "Ada",
       content: "Ada prefers SQLite.",
       source: "test",
     });
-    const [memory] = await hybrid.extractMemories(current.db, "wiki", episode.id);
+    const [memory] = await store.extractMemories("wiki", episode.id);
 
-    const first = wiki.buildObsidianWiki(current.db, "wiki", vault);
+    const first = await wiki.buildObsidianWiki(store, "wiki", vault);
     const root = path.join(vault, "Memorantado Generated");
     expect(first.files).toContain(`Memories/memory-${memory.id}.md`);
     expect(
@@ -40,7 +39,7 @@ describe("Obsidian projection", () => {
     expect(fs.existsSync(path.join(root, "Memories.base"))).toBe(true);
 
     fs.writeFileSync(path.join(root, "stale.md"), "stale");
-    const second = wiki.buildObsidianWiki(current.db, "wiki", vault);
+    const second = await wiki.buildObsidianWiki(store, "wiki", vault);
     expect(second.revision).toBe(first.revision);
     expect(fs.existsSync(path.join(root, "stale.md"))).toBe(false);
     expect(
@@ -50,9 +49,6 @@ describe("Obsidian projection", () => {
       project: "wiki",
       revision: first.revision,
     });
-    const state = current.db
-      .prepare("SELECT count(*) AS count FROM wiki_projection_state WHERE project = ?")
-      .get("wiki") as { count: number };
-    expect(state.count).toBe(first.files.length);
+    expect(await store.wikiProjectionStateCount("wiki")).toBe(first.files.length);
   });
 });

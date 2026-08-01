@@ -2,10 +2,9 @@ import {
   ResourceTemplate,
   type McpServer,
 } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type Database from "better-sqlite3";
-import * as hybrid from "../db/hybridMemory.js";
+import type { MemoryStore } from "../db/store.js";
 
-export function registerMemoryResources(server: McpServer, db: Database.Database): void {
+export function registerMemoryResources(server: McpServer, store: MemoryStore): void {
   server.registerResource(
     "semantic-memory",
     new ResourceTemplate("memory://{project}/memories/{id}", { list: undefined }),
@@ -18,7 +17,7 @@ export function registerMemoryResources(server: McpServer, db: Database.Database
     async (uri, variables) => {
       const project = decodeURIComponent(String(variables.project));
       const memoryId = Number.parseInt(String(variables.id), 10);
-      return jsonResource(uri, hybrid.explainMemory(db, project, memoryId));
+      return jsonResource(uri, await store.explainMemory(project, memoryId));
     }
   );
   server.registerResource(
@@ -32,7 +31,7 @@ export function registerMemoryResources(server: McpServer, db: Database.Database
     async (uri, variables) => {
       const project = decodeURIComponent(String(variables.project));
       const episodeId = Number.parseInt(String(variables.id), 10);
-      return jsonResource(uri, hybrid.getEpisode(db, project, episodeId));
+      return jsonResource(uri, await store.getEpisode(project, episodeId));
     }
   );
 }

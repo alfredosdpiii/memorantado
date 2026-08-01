@@ -1,7 +1,6 @@
 import type Database from "better-sqlite3";
 import { upsertLocalEmbedding } from "./embeddingStore.js";
 import { createLocalExtractor } from "../memory/extractor.js";
-import { runRetrievalEvaluation } from "../bench/memoryEvaluation.js";
 import { semanticConflictReason } from "../memory/conflicts.js";
 import type {
   CandidateMemory,
@@ -29,7 +28,6 @@ import {
 } from "./temporalMemory.js";
 
 export { retrieveContext } from "./hybridRetrieval.js";
-export { runRetrievalEvaluation as runMemoryBenchmark };
 
 export type AppendEpisodeInput = {
   session?: string;
