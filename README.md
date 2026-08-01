@@ -215,7 +215,68 @@ flowchart TD
 | `memory_access_log`  | Retrieval queries, selected result IDs, and latency      |
 | `benchmark_runs`     | Local benchmark reports and metrics                      |
 
-All memory layers use SQLite and FTS5. Hybrid retrieval combines FTS, deterministic local embeddings, lexical overlap, recency, importance, and confidence.
+By default all memory layers use SQLite and FTS5. Hybrid retrieval combines FTS, deterministic local embeddings, lexical overlap, recency, importance, and confidence. An opt-in Postgres + pgvector backend is available (below).
+
+## Postgres backend
+
+SQLite remains the byte-identical default. Set two environment variables to switch the whole server (MCP, REST, UI) to Postgres + pgvector:
+
+| Environment Variable       | Default  | Description                                           |
+| -------------------------- | -------- | ----------------------------------------------------- |
+| `MEMORANTADO_STORE`        | `sqlite` | `sqlite` or `pg`                                      |
+| `MEMORANTADO_DATABASE_URL` | -        | Postgres connection URL (required when store is `pg`) |
+
+```bash
+# throwaway local Postgres 16 + pgvector on 127.0.0.1:55432 (tmpfs, no volume)
+docker compose -f docker-compose.pg.yml up -d
+
+export MEMORANTADO_STORE=pg
+export MEMORANTADO_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/memorantado
+memorantado serve   # schema is created automatically on first connect
+```
+
+### Migrating from SQLite
+
+```bash
+npm run migrate:to-pg -- --project <PROJECT> \
+  --source ~/.memorantado/memorantado.sqlite \
+  --database-url postgres://postgres:postgres@127.0.0.1:55432/memorantado
+```
+
+The migration exports the project's JSONL exchange format from SQLite and imports it into Postgres (embeddings are recomputed), then verifies per-type record counts. The SQLite file is untouched.
+
+### Backend parity
+
+Both backends share the same `MemoryStore` facade, the same 4-channel retrieval pipeline (bm25 + vector + overlap + prior fused with RRF, `MIN_VECTOR_RELEVANCE = 0.35`), the same bitemporal claim-version semantics, and the same deterministic local-hash embeddings computed at write time (episodes, semantic memories, and claim versions).
+
+The pg bm25 channel replicates FTS5's exact bm25 formula (idf `log((N - n + 0.5)/(n + 0.5))` clamped to `1e-6`, `k1 = 1.2`, `b = 0.75`, whole-table document stats) in SQL over GIN-indexed tsvectors, so `bench:memory` metrics are identical on both backends across all 14 measures.
+
+The one structural difference is scale: SQLite scans at most the newest 5000 rows per table per retrieval (`MAX_RETRIEVAL_SCAN`), while Postgres uses HNSW indexes (`vector_cosine_ops`) over the whole corpus. `bench:scale` demonstrates this with 25,000 memories + 25,000 episodes and needle rows planted as the oldest ids:
+
+| Backend | Needles found (oldest rows) | p50      | p95      | mean     | max      |
+| ------- | --------------------------- | -------- | -------- | -------- | -------- |
+| sqlite  | 0/3 (+ episode needle 0/1)  | 160.92ms | 170.79ms | 161.89ms | 181.78ms |
+| pg      | 3/3 (+ episode needle 1/1)  | 156.79ms | 212.03ms | 156.46ms | 242.62ms |
+
+### When to use which
+
+- **SQLite (default)**: single-process, zero-dependency, file-based. Best for local agent memory up to the per-retrieval 5000-row scan window.
+- **Postgres**: shared/multi-process access, larger corpora, or when old rows must stay retrievable (indexed KNN instead of a capped scan). Requires running Postgres 16 + pgvector.
+
+### Documented deviations on pg
+
+- FTS uses Postgres's `english` text search configuration (Snowball stemmer + stopword list) instead of FTS5's porter tokenizer. Stemmed forms can differ, and stopwords are excluded from pg tsvectors (FTS5 indexes them). This only shows up as a bottom-rank order swap among rows whose terms are all stopwords or unseen (idf clamped to the `1e-6` noise floor); benchmark metrics are unaffected.
+- The opt-in `ollama` embedding provider stores `vector_json` only and uses an unindexed exact scan; only the default `local-hash` provider gets HNSW indexes.
+- The overlap and prior channels score a bounded candidate union (bm25 + vector hits), matching SQLite's behavior.
+- Temporal (`as-of`/range) queries scan up to 100,000 claim versions per memory table instead of SQLite's unbounded scan; beyond that, results are truncated (documented in `src/db/pg/retrieval.ts`).
+
+### Verifying a pg deployment
+
+```bash
+npm run test:pg    # full vitest suite against the compose container (creates/destroys scratch DBs)
+npm run bench:memory   # parity benchmark on whichever backend env vars select
+npm run bench:scale    # 25k scenario on whichever backend env vars select
+```
 
 ## MCP Tools
 
@@ -398,17 +459,19 @@ Important caveat: this script is not an official product benchmark run and must 
 
 ## Configuration
 
-| Environment Variable                  | Default                             | Description                           |
-| ------------------------------------- | ----------------------------------- | ------------------------------------- |
-| `MEMORANTADO_PORT`                    | `3789`                              | Server port                           |
-| `MEMORANTADO_DB`                      | `~/.memorantado/memorantado.sqlite` | Database file path                    |
-| `MEMORANTADO_PROJECT`                 | `global`                            | Default MCP project namespace         |
-| `MEMORANTADO_ENABLE_METRICS`          | `true`                              | Enable `/api/metrics`                 |
-| `MEMORANTADO_EMBEDDING_PROVIDER`      | `local-hash`                        | `local-hash` or opt-in `ollama`       |
-| `MEMORANTADO_OLLAMA_URL`              | `http://127.0.0.1:11434`            | Loopback-only Ollama endpoint         |
-| `MEMORANTADO_OLLAMA_EMBED_MODEL`      | `embeddinggemma`                    | Ollama embedding model                |
-| `MEMORANTADO_OLLAMA_EMBED_DIMENSIONS` | model default                       | Optional positive embedding dimension |
-| `LOG_LEVEL`                           | `info`                              | Fastify/Pino log level                |
+| Environment Variable                  | Default                             | Description                            |
+| ------------------------------------- | ----------------------------------- | -------------------------------------- |
+| `MEMORANTADO_PORT`                    | `3789`                              | Server port                            |
+| `MEMORANTADO_DB`                      | `~/.memorantado/memorantado.sqlite` | Database file path (sqlite store)      |
+| `MEMORANTADO_STORE`                   | `sqlite`                            | `sqlite` or `pg` (Postgres + pgvector) |
+| `MEMORANTADO_DATABASE_URL`            | -                                   | Postgres URL, required when store `pg` |
+| `MEMORANTADO_PROJECT`                 | `global`                            | Default MCP project namespace          |
+| `MEMORANTADO_ENABLE_METRICS`          | `true`                              | Enable `/api/metrics`                  |
+| `MEMORANTADO_EMBEDDING_PROVIDER`      | `local-hash`                        | `local-hash` or opt-in `ollama`        |
+| `MEMORANTADO_OLLAMA_URL`              | `http://127.0.0.1:11434`            | Loopback-only Ollama endpoint          |
+| `MEMORANTADO_OLLAMA_EMBED_MODEL`      | `embeddinggemma`                    | Ollama embedding model                 |
+| `MEMORANTADO_OLLAMA_EMBED_DIMENSIONS` | model default                       | Optional positive embedding dimension  |
+| `LOG_LEVEL`                           | `info`                              | Fastify/Pino log level                 |
 
 After changing the embedding provider, model, or dimensions, run `memorantado backfill-embeddings <PROJECT>`.
 
@@ -427,6 +490,12 @@ npm run typecheck
 # Run tests
 npm run test
 
+# Run tests against the Postgres backend (starts the compose container)
+npm run test:pg
+
+# Migrate a SQLite project to Postgres
+npm run migrate:to-pg -- --project <PROJECT> --database-url <URL>
+
 # Run coverage
 npm run test:coverage
 
@@ -435,6 +504,9 @@ npm run bench:memory
 
 # Run public retrieval/evidence proxy benchmark
 npm run bench:public-memory
+
+# Run the 25k scale scenario (backend per MEMORANTADO_STORE)
+npm run bench:scale
 
 # Run all validation gates
 npm run validate
