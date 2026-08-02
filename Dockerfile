@@ -3,8 +3,7 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
-COPY tsconfig.json ./
-COPY src ./src
+COPY . .
 # prune after build: drops devDeps without re-running scripts, keeping the
 # compiled/downloaded better-sqlite3 binding intact for the runtime stage.
 RUN npm run build && npm prune --omit=dev
