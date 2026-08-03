@@ -16,7 +16,7 @@ import type { Pool } from "./client.js";
  * - local-hash embeddings gain a vector(64) column with HNSW indexes; other
  *   providers keep vector_json only and use exact KNN (documented in README).
  */
-export const PG_SCHEMA_SQL = `
+const PG_SCHEMA_SQL = `
 CREATE EXTENSION IF NOT EXISTS vector;
 
 --------------------------------------------------------------------------------

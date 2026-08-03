@@ -21,7 +21,6 @@ import {
   searchEpisodeFts,
   searchMemoryFts,
   searchVersionFts,
-  toPrefixTsquery,
   type PgTemporalFilter,
 } from "./channels.js";
 import { searchNodesPg } from "./graphSearch.js";
@@ -33,9 +32,6 @@ const DEFAULT_TOKEN_BUDGET = 1800;
 // scan; the cap is lifted from sqlite's 5000 to an honest 100k. Current-mode
 // retrieval has no scan at all (index-backed bm25 + KNN candidates).
 const MAX_TEMPORAL_SCAN = 100_000;
-
-export { toPrefixTsquery };
-export type { PgTemporalFilter };
 
 export async function retrieveContextPg(
   db: Queryable,

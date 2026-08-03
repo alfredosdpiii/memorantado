@@ -11,7 +11,7 @@ types.setTypeParser(20, (value: string) => Number.parseInt(value, 10));
 // indistinguishable between backends.
 types.setTypeParser(1184, (value: string) => new Date(value).toISOString());
 
-export type { Pool, PoolClient } from "pg";
+export type { Pool } from "pg";
 
 /** Minimal structural query interface implemented by both Pool and PoolClient. */
 export type Queryable = {

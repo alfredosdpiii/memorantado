@@ -14,7 +14,7 @@ type EmbeddingTable =
   | "claim_version_embeddings";
 type EmbeddingOwnerColumn = "memory_id" | "episode_id" | "claim_version_id";
 
-export function embeddingTarget(target: "memory" | "episode" | "claim_version"): {
+function embeddingTarget(target: "memory" | "episode" | "claim_version"): {
   table: EmbeddingTable;
   column: EmbeddingOwnerColumn;
 } {
@@ -34,7 +34,7 @@ export function embeddingTarget(target: "memory" | "episode" | "claim_version"):
  * served by the exact-scan channel (mirrors sqlite's per-row provider
  * semantics: the stored provider flips on backfill).
  */
-export async function upsertEmbeddingPg(
+async function upsertEmbeddingPg(
   db: Queryable,
   target: "memory" | "episode" | "claim_version",
   id: number,

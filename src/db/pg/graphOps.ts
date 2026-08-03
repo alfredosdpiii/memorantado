@@ -2,7 +2,7 @@ import type { Graph, GraphEntity, GraphRelation } from "../graph.js";
 import { withTransaction, type Pool, type Queryable } from "./client.js";
 import { readExpandedGraphBySeedIds } from "./graphSearch.js";
 
-export async function findEntityId(
+async function findEntityId(
   db: Queryable,
   project: string,
   name: string
