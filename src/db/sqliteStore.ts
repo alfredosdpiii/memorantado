@@ -7,6 +7,8 @@ import { migrate } from "./migrate.js";
 import * as exchange from "./exchange.js";
 import * as graph from "./graph.js";
 import * as hybrid from "./hybridMemory.js";
+import * as curation from "./memoryCuration.js";
+import * as conflicts from "./memoryConflicts.js";
 import * as timeline from "./timeline.js";
 import { runRetrievalEvaluation } from "../bench/memoryEvaluation.js";
 import { backfillConfiguredEmbeddings } from "../memory/embeddingBackfill.js";
@@ -107,17 +109,43 @@ export class SqliteStore implements MemoryStore {
   extractMemories: Method<"extractMemories"> = async (project, episodeId) =>
     hybrid.extractMemories(this.db, project, episodeId);
   listSemanticMemories: Method<"listSemanticMemories"> = async (project, opts) =>
-    hybrid.listSemanticMemories(this.db, project, opts);
+    curation.listSemanticMemories(this.db, project, opts);
+  getSemanticMemory: Method<"getSemanticMemory"> = async (project, memoryId) =>
+    hybrid.getMemory(this.db, project, memoryId);
+  getSemanticMemoryByKey: Method<"getSemanticMemoryByKey"> = async (project, key) =>
+    hybrid.getMemoryByKey(this.db, project, key);
+  supersedeMemory: Method<"supersedeMemory"> = async (
+    project,
+    memoryId,
+    input,
+    evidence
+  ) => hybrid.supersedeMemory(this.db, project, memoryId, input, evidence);
+  confirmMemory: Method<"confirmMemory"> = async (project, memoryId, evidence) =>
+    curation.confirmMemory(this.db, project, memoryId, evidence);
+  invalidateMemory: Method<"invalidateMemory"> = async (project, memoryId, reason) =>
+    curation.invalidateMemory(this.db, project, memoryId, reason);
+  deleteSemanticMemory: Method<"deleteSemanticMemory"> = async (project, memoryId) =>
+    curation.deleteSemanticMemory(this.db, project, memoryId);
+  createConflict: Method<"createConflict"> = async (
+    project,
+    memoryId,
+    conflictingId,
+    reason
+  ) => curation.flagConflict(this.db, project, memoryId, conflictingId, reason);
+  recordFileSnapshot: Method<"recordFileSnapshot"> = async (project, input) =>
+    curation.recordFileSnapshot(this.db, project, input);
+  findStaleFileEvidence: Method<"findStaleFileEvidence"> = async (project, files) =>
+    curation.findStaleFileEvidence(this.db, project, files);
   setMemoryLifecycle: Method<"setMemoryLifecycle"> = async (
     project,
     memoryId,
     status,
     reason
-  ) => hybrid.setMemoryLifecycle(this.db, project, memoryId, status, reason);
+  ) => curation.setMemoryLifecycle(this.db, project, memoryId, status, reason);
   explainMemory: Method<"explainMemory"> = async (project, memoryId) =>
     hybrid.explainMemory(this.db, project, memoryId);
   listConflicts: Method<"listConflicts"> = async (project, status) =>
-    hybrid.listConflicts(this.db, project, status);
+    conflicts.listConflicts(this.db, project, status);
   resolveConflict: Method<"resolveConflict"> = async (
     project,
     conflictId,
@@ -125,7 +153,14 @@ export class SqliteStore implements MemoryStore {
     status,
     audit
   ) =>
-    hybrid.resolveConflict(this.db, project, conflictId, resolvedMemoryId, status, audit);
+    conflicts.resolveConflict(
+      this.db,
+      project,
+      conflictId,
+      resolvedMemoryId,
+      status,
+      audit
+    );
   retrieveContext: Method<"retrieveContext"> = async (project, query, opts) =>
     hybrid.retrieveContext(this.db, project, query, opts);
   runMemoryBenchmark: Method<"runMemoryBenchmark"> = async (project, topK) => {

@@ -3,7 +3,7 @@ import { contentHash } from "../../memory/localEmbedding.js";
 import {
   mapClaimVersion,
   mapMemory,
-  MEMORY_WITH_LIFECYCLE_SELECT,
+  PG_MEMORY_SELECT,
   normalizeScope,
   type ClaimVersionRow,
   type EpisodeRow,
@@ -12,9 +12,11 @@ import {
 import type {
   CandidateMemory,
   ClaimVersion,
+  EvidenceInput,
   SemanticMemory,
 } from "../../memory/types.js";
-import type { Queryable } from "./client.js";
+import { MEMORY_TAGS, tagPredicate } from "../../memory/tags.js";
+import { pgBinder, type Queryable } from "./client.js";
 import { upsertLocalEmbeddingPg } from "./embeddingOps.js";
 
 export async function getMemoryPg(
@@ -23,7 +25,7 @@ export async function getMemoryPg(
   id: number
 ): Promise<SemanticMemory | null> {
   const { rows } = await db.query<SemanticMemoryRow>(
-    `${MEMORY_WITH_LIFECYCLE_SELECT} WHERE sm.project = $1 AND sm.id = $2`,
+    `${PG_MEMORY_SELECT} WHERE sm.project = $1 AND sm.id = $2`,
     [project, id]
   );
   return rows[0] ? mapMemory(rows[0]) : null;
@@ -32,16 +34,30 @@ export async function getMemoryPg(
 export async function findActiveEquivalentPg(
   db: Queryable,
   project: string,
-  input: CandidateMemory
+  input: CandidateMemory,
+  tags: string[]
 ): Promise<SemanticMemory | null> {
+  const params: unknown[] = [
+    project,
+    input.subject,
+    input.predicate ?? "states",
+    input.content,
+  ];
+  const sameTags = tagPredicate(
+    MEMORY_TAGS,
+    "sm.id",
+    { tags, match: "exact" },
+    pgBinder(params)
+  );
   const { rows } = await db.query<SemanticMemoryRow>(
-    `${MEMORY_WITH_LIFECYCLE_SELECT}
+    `${PG_MEMORY_SELECT}
      WHERE sm.project = $1 AND sm.status = 'active'
        AND COALESCE(ml.status, 'active') = 'active'
        AND sm.subject = $2 AND sm.predicate = $3 AND sm.content = $4
+       AND ${sameTags}
      ORDER BY sm.updated_at DESC
      LIMIT 1`,
-    [project, input.subject, input.predicate ?? "states", input.content]
+    params
   );
   return rows[0] ? mapMemory(rows[0]) : null;
 }
@@ -49,15 +65,24 @@ export async function findActiveEquivalentPg(
 export async function findConflictingMemoryPg(
   db: Queryable,
   project: string,
-  input: CandidateMemory
+  input: CandidateMemory,
+  tags: string[]
 ): Promise<{ memory: SemanticMemory; reason: string } | null> {
+  const params: unknown[] = [project, input.subject, input.predicate ?? "states"];
+  const sameTags = tagPredicate(
+    MEMORY_TAGS,
+    "sm.id",
+    { tags, match: "exact" },
+    pgBinder(params)
+  );
   const { rows } = await db.query<SemanticMemoryRow>(
-    `${MEMORY_WITH_LIFECYCLE_SELECT}
+    `${PG_MEMORY_SELECT}
      WHERE sm.project = $1 AND sm.status = 'active'
        AND COALESCE(ml.status, 'active') = 'active'
        AND sm.subject = $2 AND sm.predicate = $3
+       AND ${sameTags}
      ORDER BY sm.updated_at DESC`,
-    [project, input.subject, input.predicate ?? "states"]
+    params
   );
   for (const row of rows) {
     const memory = mapMemory(row);
@@ -71,8 +96,7 @@ export async function reinforceMemoryPg(
   db: Queryable,
   existing: SemanticMemory,
   input: CandidateMemory,
-  sourceEpisodeId?: number,
-  evidence?: { quote?: string; spanStart?: number }
+  evidence?: EvidenceInput
 ): Promise<SemanticMemory> {
   const { rows } = await db.query<SemanticMemoryRow>(
     `UPDATE semantic_memories
@@ -91,31 +115,41 @@ export async function reinforceMemoryPg(
     input,
     await latestClaimVersionIdPg(db, memory.id)
   );
-  if (sourceEpisodeId) {
-    const quote = evidence?.quote ?? input.content;
-    await linkMemorySourcePg(db, existing.id, sourceEpisodeId, quote);
-    await insertMemoryEvidencePg(
-      db,
-      version,
-      sourceEpisodeId,
-      quote,
-      evidence?.spanStart
-    );
-  }
+  if (evidence) await attachEvidencePg(db, existing.id, version, evidence, input.content);
   return memory;
+}
+
+/** Links quoted evidence from an episode to a memory's claim version. */
+export async function attachEvidencePg(
+  db: Queryable,
+  memoryId: number,
+  version: ClaimVersion,
+  evidence: EvidenceInput,
+  fallbackQuote: string
+): Promise<void> {
+  const quote = evidence.quote ?? fallbackQuote;
+  await linkMemorySourcePg(db, memoryId, evidence.sourceEpisodeId, quote);
+  await insertMemoryEvidencePg(
+    db,
+    version,
+    evidence.sourceEpisodeId,
+    quote,
+    evidence.spanStart
+  );
 }
 
 export async function insertSemanticMemoryPg(
   db: Queryable,
   project: string,
-  input: CandidateMemory
+  input: CandidateMemory,
+  supersedesId?: number
 ): Promise<SemanticMemory> {
   const { rows } = await db.query<SemanticMemoryRow>(
     `INSERT INTO semantic_memories (
        project, scope, kind, subject, predicate, object, content, confidence,
-       importance, valid_from, valid_to, last_confirmed_at, metadata_json
+       importance, valid_from, valid_to, last_confirmed_at, metadata_json, supersedes_id
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12, $13)
      RETURNING *`,
     [
       project,
@@ -130,6 +164,7 @@ export async function insertSemanticMemoryPg(
       input.validFrom ?? null,
       input.validTo ?? null,
       input.metadata ? JSON.stringify(input.metadata) : null,
+      supersedesId ?? null,
     ]
   );
   return mapMemory(rows[0]);
@@ -185,7 +220,7 @@ export async function insertClaimVersionPg(
   return mapClaimVersion(row);
 }
 
-async function latestClaimVersionIdPg(
+export async function latestClaimVersionIdPg(
   db: Queryable,
   memoryId: number
 ): Promise<number | undefined> {
@@ -199,7 +234,7 @@ async function latestClaimVersionIdPg(
   return rows[0]?.id;
 }
 
-export async function insertMemoryEvidencePg(
+async function insertMemoryEvidencePg(
   db: Queryable,
   version: ClaimVersion,
   episodeId: number,
@@ -238,7 +273,7 @@ export async function insertMemoryEvidencePg(
   );
 }
 
-export async function linkMemorySourcePg(
+async function linkMemorySourcePg(
   db: Queryable,
   memoryId: number,
   episodeId: number,

@@ -33,12 +33,23 @@ import {
   getEpisodePg,
   listConflictsPg,
   listEpisodesPg,
+  getMemoryByKeyPg,
   listSemanticMemoriesPg,
   resolveConflictPg,
+  supersedeMemoryPg,
   setMemoryLifecyclePg,
   upsertSemanticMemoryPg,
 } from "./hybridOps.js";
 import { backfillConfiguredEmbeddingsPg } from "./embeddingOps.js";
+import {
+  confirmMemoryPg,
+  deleteSemanticMemoryPg,
+  findStaleFileEvidencePg,
+  flagConflictPg,
+  invalidateMemoryPg,
+  recordFileSnapshotPg,
+} from "./curationOps.js";
+import { getMemoryPg } from "./hybridWrite.js";
 import { exportProjectJsonlPg, importProjectJsonlPg } from "./exchangeOps.js";
 import {
   insertBenchmarkRunPg,
@@ -137,6 +148,32 @@ export class PgStore implements MemoryStore {
     extractMemoriesPg(this.pool, project, episodeId);
   listSemanticMemories: MemoryStore["listSemanticMemories"] = (project, opts) =>
     listSemanticMemoriesPg(this.pool, project, opts);
+  getSemanticMemory: MemoryStore["getSemanticMemory"] = (project, memoryId) =>
+    getMemoryPg(this.pool, project, memoryId);
+  getSemanticMemoryByKey: MemoryStore["getSemanticMemoryByKey"] = (project, key) =>
+    getMemoryByKeyPg(this.pool, project, key);
+  supersedeMemory: MemoryStore["supersedeMemory"] = (
+    project,
+    memoryId,
+    input,
+    evidence
+  ) => supersedeMemoryPg(this.pool, project, memoryId, input, evidence);
+  confirmMemory: MemoryStore["confirmMemory"] = (project, memoryId, evidence) =>
+    confirmMemoryPg(this.pool, project, memoryId, evidence);
+  invalidateMemory: MemoryStore["invalidateMemory"] = (project, memoryId, reason) =>
+    invalidateMemoryPg(this.pool, project, memoryId, reason);
+  deleteSemanticMemory: MemoryStore["deleteSemanticMemory"] = (project, memoryId) =>
+    deleteSemanticMemoryPg(this.pool, project, memoryId);
+  createConflict: MemoryStore["createConflict"] = (
+    project,
+    memoryId,
+    conflictingId,
+    reason
+  ) => flagConflictPg(this.pool, project, memoryId, conflictingId, reason);
+  recordFileSnapshot: MemoryStore["recordFileSnapshot"] = (project, input) =>
+    recordFileSnapshotPg(this.pool, project, input);
+  findStaleFileEvidence: MemoryStore["findStaleFileEvidence"] = (project, files) =>
+    findStaleFileEvidencePg(this.pool, project, files);
   setMemoryLifecycle: MemoryStore["setMemoryLifecycle"] = (
     project,
     memoryId,
@@ -162,6 +199,9 @@ export class PgStore implements MemoryStore {
       // statement-scoped HNSW search depth (SET LOCAL requires a transaction).
       await client.query("BEGIN");
       await client.query("SET LOCAL hnsw.ef_search = 64");
+      // A tag scope filters the KNN result; pgvector >= 0.8 keeps scanning
+      // the index until enough in-scope rows are found.
+      if (opts?.tags) await client.query("SET LOCAL hnsw.iterative_scan = strict_order");
       const pack = await retrieveContextPg(client, project, query, opts);
       await client.query("COMMIT");
       return pack;

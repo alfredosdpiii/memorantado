@@ -9,6 +9,7 @@ import type {
   QueryIntent,
   SemanticMemory,
 } from "../memory/types.js";
+import { EPISODE_TAGS, MEMORY_TAGS, parseTagsJson, tagsJsonSql } from "../memory/tags.js";
 
 export type ClaimVersionRow = {
   id: number;
@@ -133,8 +134,16 @@ export type EpisodeRow = {
   content: string;
   source: string | null;
   metadata_json: string | null;
+  tags_json?: string | null;
   created_at: string;
 };
+
+/** Episode columns with the episode's tags, for `FROM episodes <alias>`. */
+export function episodeColumns(dialect: "sqlite" | "pg", alias: string): string {
+  return `${alias}.id, ${alias}.project, ${alias}.session, ${alias}.actor, ${alias}.role,
+    ${alias}.content, ${alias}.source, ${alias}.metadata_json, ${alias}.created_at,
+    ${tagsJsonSql(dialect, EPISODE_TAGS, `${alias}.id`)} AS tags_json`;
+}
 
 export type SemanticMemoryRow = {
   id: number;
@@ -156,18 +165,27 @@ export type SemanticMemoryRow = {
   lifecycle_status?: "active" | "archived";
   archive_reason?: string | null;
   archived_at?: string | null;
+  memory_key?: string | null;
+  tags_json?: string | null;
   created_at: string;
   updated_at: string;
 };
 
-export const MEMORY_WITH_LIFECYCLE_SELECT = `
+function memorySelect(dialect: "sqlite" | "pg"): string {
+  return `
   SELECT sm.*,
          COALESCE(ml.status, 'active') AS lifecycle_status,
          ml.reason AS archive_reason,
-         ml.archived_at
+         ml.archived_at,
+         (SELECT mk.memory_key FROM memory_keys mk WHERE mk.memory_id = sm.id) AS memory_key,
+         ${tagsJsonSql(dialect, MEMORY_TAGS, "sm.id")} AS tags_json
   FROM semantic_memories sm
   LEFT JOIN memory_lifecycle ml ON ml.memory_id = sm.id
 `;
+}
+
+export const MEMORY_WITH_LIFECYCLE_SELECT = memorySelect("sqlite");
+export const PG_MEMORY_SELECT = memorySelect("pg");
 
 export type MemoryConflictRow = {
   id: number;
@@ -200,6 +218,7 @@ export function mapEpisode(row: EpisodeRow): Episode {
     content: row.content,
     source: row.source,
     metadata: parseJson<Record<string, unknown>>(row.metadata_json),
+    tags: parseTagsJson(row.tags_json),
     createdAt: row.created_at,
   };
 }
@@ -222,6 +241,8 @@ export function mapMemory(row: SemanticMemoryRow): SemanticMemory {
     lastConfirmedAt: row.last_confirmed_at,
     supersedesId: row.supersedes_id,
     metadata: parseJson<Record<string, unknown>>(row.metadata_json),
+    tags: parseTagsJson(row.tags_json),
+    key: row.memory_key ?? null,
     lifecycleStatus: row.lifecycle_status ?? "active",
     archiveReason: row.archive_reason ?? null,
     archivedAt: row.archived_at ?? null,

@@ -1,5 +1,6 @@
 import { withTransaction, type Pool, type Queryable } from "./client.js";
 import { upsertLocalEmbeddingPg } from "./embeddingOps.js";
+import { EXPORT_ORDER, TAG_OWNERS } from "../exchange.js";
 
 const EXPORT_TABLES = [
   "episodes",
@@ -9,6 +10,10 @@ const EXPORT_TABLES = [
   "claim_versions",
   "memory_evidence",
   "conflict_resolution_events",
+  "memory_tags",
+  "episode_tags",
+  "memory_keys",
+  "file_snapshots",
 ] as const;
 type ExportTable = (typeof EXPORT_TABLES)[number];
 
@@ -170,8 +175,17 @@ async function readProjectRows(
     );
     return rows;
   }
+  if (type === "memory_tags" || type === "episode_tags") {
+    const { owner, column } = TAG_OWNERS[type];
+    const { rows } = await pool.query<Record<string, unknown>>(
+      `SELECT tg.* FROM ${type} tg JOIN ${owner} o ON o.id = tg.${column}
+       WHERE o.project = $1 ORDER BY tg.${column}, tg.tag`,
+      [project]
+    );
+    return rows;
+  }
   const { rows } = await pool.query<Record<string, unknown>>(
-    `SELECT * FROM ${type} WHERE project = $1 ORDER BY id`,
+    `SELECT * FROM ${type} WHERE project = $1 ORDER BY ${EXPORT_ORDER[type] ?? "id"}`,
     [project]
   );
   // Drop pg-only generated columns so the JSONL matches the sqlite export

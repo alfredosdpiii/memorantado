@@ -247,7 +247,7 @@ export function createMcpServer(
       role: z.string().optional(),
       content: z.string().min(1),
       source: z.string().optional(),
-      metadata: z.record(z.unknown()).optional(),
+      metadata: z.record(z.string(), z.unknown()).optional(),
       extract: z.boolean().default(true),
     },
     async (input) => {
@@ -359,7 +359,7 @@ export function createMcpServer(
       confidence: z.number().min(0).max(1).optional(),
       importance: z.number().min(0).max(1).optional(),
       sourceEpisodeId: z.number().int().positive().optional(),
-      metadata: z.record(z.unknown()).optional(),
+      metadata: z.record(z.string(), z.unknown()).optional(),
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);
@@ -427,7 +427,7 @@ export function createMcpServer(
       status: z.enum(["resolved", "ignored"]).default("resolved"),
       actor: z.string().optional(),
       reason: z.string().optional(),
-      metadata: z.record(z.unknown()).optional(),
+      metadata: z.record(z.string(), z.unknown()).optional(),
     },
     async (input) => {
       const project = resolveProject(input.project, defaultProject);

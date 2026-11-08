@@ -1,12 +1,13 @@
 import { createLocalExtractor } from "../../memory/extractor.js";
 import {
+  episodeColumns,
   mapClaimVersion,
   mapConflict,
   mapEpisode,
   mapMemory,
   mapMemoryEvidence,
   mapResolutionEvent,
-  MEMORY_WITH_LIFECYCLE_SELECT,
+  PG_MEMORY_SELECT,
   type ClaimVersionRow,
   type ConflictResolutionEventRow,
   type EpisodeRow,
@@ -15,36 +16,66 @@ import {
   type SemanticMemoryRow,
 } from "../hybridRows.js";
 import { getMemorySourcesPg } from "./channels.js";
-import { withTransaction, type Pool } from "./client.js";
+import { pgBinder, withTransaction, type Pool, type Queryable } from "./client.js";
 import { upsertLocalEmbeddingPg } from "./embeddingOps.js";
 import {
+  attachEvidencePg,
   findActiveEquivalentPg,
   findConflictingMemoryPg,
   getMemoryPg,
   insertClaimVersionPg,
-  insertMemoryEvidencePg,
   insertSemanticMemoryPg,
-  linkMemorySourcePg,
+  latestClaimVersionIdPg,
   reinforceMemoryPg,
 } from "./hybridWrite.js";
+import {
+  sameClaim,
+  semanticListClauses,
+  semanticListOrder,
+  successorClaim,
+  type SemanticMemoryListOptions,
+} from "../memoryRules.js";
+import {
+  EPISODE_TAGS,
+  normalizeTags,
+  StateError,
+  tagPredicate,
+} from "../../memory/tags.js";
 import type { MemoryExplanation } from "../temporalMemory.js";
 import type { MemoryStore } from "../store.js";
 import type {
   CandidateMemory,
   Episode,
+  EvidenceInput,
   MemoryConflict,
   SemanticMemory,
+  TagFilter,
 } from "../../memory/types.js";
 
 const EPISODE_COLUMNS =
   "id, project, session, actor, role, content, source, metadata_json, created_at";
+const TAGGED_EPISODE_COLUMNS = episodeColumns("pg", "episodes");
 
 export async function appendEpisodePg(
   pool: Pool,
   project: string,
   input: Parameters<MemoryStore["appendEpisode"]>[1]
 ): Promise<Episode> {
-  const { rows } = await pool.query<EpisodeRow>(
+  const tags = normalizeTags(input.tags);
+  const episode = await withTransaction(pool, (client) =>
+    insertEpisodePg(client, project, input, tags)
+  );
+  await upsertLocalEmbeddingPg(pool, "episode", episode.id, project, episode.content);
+  return episode;
+}
+
+export async function insertEpisodePg(
+  db: Queryable,
+  project: string,
+  input: Parameters<MemoryStore["appendEpisode"]>[1],
+  tags: string[]
+): Promise<Episode> {
+  const { rows } = await db.query<EpisodeRow>(
     `INSERT INTO episodes (project, session, actor, role, content, source, metadata_json)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING ${EPISODE_COLUMNS}`,
@@ -58,9 +89,13 @@ export async function appendEpisodePg(
       input.metadata ? JSON.stringify(input.metadata) : null,
     ]
   );
-  const episode = mapEpisode(rows[0]);
-  await upsertLocalEmbeddingPg(pool, "episode", episode.id, project, episode.content);
-  return episode;
+  for (const tag of tags) {
+    await db.query(`INSERT INTO episode_tags (episode_id, tag) VALUES ($1, $2)`, [
+      rows[0].id,
+      tag,
+    ]);
+  }
+  return { ...mapEpisode(rows[0]), tags };
 }
 
 export async function getEpisodePg(
@@ -69,7 +104,7 @@ export async function getEpisodePg(
   id: number
 ): Promise<Episode | null> {
   const { rows } = await pool.query<EpisodeRow>(
-    `SELECT ${EPISODE_COLUMNS} FROM episodes WHERE project = $1 AND id = $2`,
+    `SELECT ${TAGGED_EPISODE_COLUMNS} FROM episodes WHERE project = $1 AND id = $2`,
     [project, id]
   );
   return rows[0] ? mapEpisode(rows[0]) : null;
@@ -78,28 +113,25 @@ export async function getEpisodePg(
 export async function listEpisodesPg(
   pool: Pool,
   project: string,
-  opts: { session?: string; limit?: number; offset?: number } = {}
+  opts: { session?: string; tags?: TagFilter; limit?: number; offset?: number } = {}
 ): Promise<Episode[]> {
-  const limit = opts.limit ?? 50;
-  const offset = opts.offset ?? 0;
-  const params: Array<string | number> = [project];
-  let sessionClause = "";
-  if (opts.session) {
-    params.push(opts.session);
-    sessionClause = `AND session = $${params.length}`;
-  }
-  params.push(limit, offset);
+  const params: unknown[] = [project];
+  const bind = pgBinder(params);
+  const clauses = ["project = $1"];
+  if (opts.session) clauses.push(`session = ${bind(opts.session)}`);
+  if (opts.tags) clauses.push(tagPredicate(EPISODE_TAGS, "episodes.id", opts.tags, bind));
   const { rows } = await pool.query<EpisodeRow>(
-    `SELECT ${EPISODE_COLUMNS}
+    `SELECT ${TAGGED_EPISODE_COLUMNS}
      FROM episodes
-     WHERE project = $1 ${sessionClause}
+     WHERE ${clauses.join(" AND ")}
      ORDER BY created_at DESC, id DESC
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+     LIMIT ${bind(opts.limit ?? 50)} OFFSET ${bind(opts.offset ?? 0)}`,
     params
   );
   return rows.map(mapEpisode);
 }
 
+/** Mirrors hybridMemory.upsertSemanticMemory (tags, keys, reinforcement). */
 export async function upsertSemanticMemoryPg(
   pool: Pool,
   project: string,
@@ -107,36 +139,158 @@ export async function upsertSemanticMemoryPg(
   sourceEpisodeId?: number,
   evidence?: { quote?: string; spanStart?: number }
 ): Promise<SemanticMemory> {
-  const memory = await withTransaction(pool, async (client) => {
-    const existing = await findActiveEquivalentPg(client, project, input);
-    if (existing) {
-      return reinforceMemoryPg(client, existing, input, sourceEpisodeId, evidence);
+  const tags = normalizeTags(input.tags);
+  const source = sourceEpisodeId ? { sourceEpisodeId, ...evidence } : undefined;
+  const memoryId = await withTransaction(pool, async (client) => {
+    const keyed = input.key ? await getMemoryByKeyPg(client, project, input.key) : null;
+    if (keyed?.status === "active") {
+      return sameClaim(keyed, input)
+        ? (await reinforceMemoryPg(client, keyed, input, source)).id
+        : (await supersedeWithinPg(client, keyed, input, source)).id;
     }
-    const conflicting = await findConflictingMemoryPg(client, project, input);
-    const inserted = await insertSemanticMemoryPg(client, project, input);
-    const version = await insertClaimVersionPg(client, inserted, input);
-    if (sourceEpisodeId) {
-      const quote = evidence?.quote ?? input.content;
-      await linkMemorySourcePg(client, inserted.id, sourceEpisodeId, quote);
-      await insertMemoryEvidencePg(
-        client,
-        version,
-        sourceEpisodeId,
-        quote,
-        evidence?.spanStart
-      );
-    }
+    const existing = input.key
+      ? null
+      : await findActiveEquivalentPg(client, project, input, tags);
+    if (existing) return (await reinforceMemoryPg(client, existing, input, source)).id;
+    const conflicting = await findConflictingMemoryPg(client, project, input, tags);
+    const inserted = await insertTaggedMemoryPg(client, project, input, tags, source);
     if (conflicting) {
-      await client.query(
-        `INSERT INTO memory_conflicts (project, memory_id, conflicting_id, reason)
-         VALUES ($1, $2, $3, $4)`,
-        [project, inserted.id, conflicting.memory.id, conflicting.reason]
+      await createConflictPg(
+        client,
+        project,
+        inserted.id,
+        conflicting.memory.id,
+        conflicting.reason
       );
     }
-    return inserted;
+    return inserted.id;
   });
-  await upsertLocalEmbeddingPg(pool, "memory", memory.id, project, memory.content);
-  return memory;
+  return (await getMemoryPg(pool, project, memoryId)) as SemanticMemory;
+}
+
+/** Mirrors hybridMemory.supersedeMemory. */
+export async function supersedeMemoryPg(
+  pool: Pool,
+  project: string,
+  memoryId: number,
+  input: Partial<CandidateMemory> & { content: string },
+  evidence?: EvidenceInput
+): Promise<SemanticMemory | null> {
+  const id = await withTransaction(pool, async (client) => {
+    const old = await getMemoryPg(client, project, memoryId);
+    if (!old) return null;
+    return (await supersedeWithinPg(client, old, input, evidence)).id;
+  });
+  return id === null ? null : getMemoryPg(pool, project, id);
+}
+
+async function supersedeWithinPg(
+  db: Queryable,
+  old: SemanticMemory,
+  input: Partial<CandidateMemory> & { content: string },
+  evidence?: EvidenceInput
+): Promise<SemanticMemory> {
+  if (old.status !== "active") throw new StateError(`memory ${old.id} is ${old.status}`);
+  await db.query(
+    `UPDATE semantic_memories SET status = 'superseded', updated_at = now() WHERE id = $1`,
+    [old.id]
+  );
+  await db.query(
+    `UPDATE claim_versions SET status = 'superseded', retracted_at = COALESCE(retracted_at, now())
+     WHERE memory_id = $1 AND status = 'active'`,
+    [old.id]
+  );
+  if (old.key) await db.query(`DELETE FROM memory_keys WHERE memory_id = $1`, [old.id]);
+  const next = await insertTaggedMemoryPg(
+    db,
+    old.project,
+    successorClaim(old, input),
+    input.tags ? normalizeTags(input.tags) : old.tags,
+    evidence,
+    {
+      supersedesId: old.id,
+      supersedesVersionId: await latestClaimVersionIdPg(db, old.id),
+    }
+  );
+  if (old.key) await assignKeyPg(db, old.project, old.key, next.id);
+  return next;
+}
+
+async function insertTaggedMemoryPg(
+  db: Queryable,
+  project: string,
+  input: CandidateMemory,
+  tags: string[],
+  evidence?: EvidenceInput,
+  chain: { supersedesId?: number; supersedesVersionId?: number } = {}
+): Promise<SemanticMemory> {
+  const inserted = await insertSemanticMemoryPg(db, project, input, chain.supersedesId);
+  for (const tag of tags) {
+    await db.query(`INSERT INTO memory_tags (memory_id, tag) VALUES ($1, $2)`, [
+      inserted.id,
+      tag,
+    ]);
+  }
+  if (input.key) await assignKeyPg(db, project, input.key, inserted.id);
+  const version = await insertClaimVersionPg(
+    db,
+    inserted,
+    input,
+    chain.supersedesVersionId
+  );
+  if (evidence) await attachEvidencePg(db, inserted.id, version, evidence, input.content);
+  await upsertLocalEmbeddingPg(db, "memory", inserted.id, project, inserted.content);
+  return inserted;
+}
+
+export async function getMemoryByKeyPg(
+  db: Queryable,
+  project: string,
+  key: string
+): Promise<SemanticMemory | null> {
+  const { rows } = await db.query<SemanticMemoryRow>(
+    `${PG_MEMORY_SELECT}
+     JOIN memory_keys mk ON mk.memory_id = sm.id
+     WHERE mk.project = $1 AND mk.memory_key = $2`,
+    [project, key]
+  );
+  return rows[0] ? mapMemory(rows[0]) : null;
+}
+
+async function assignKeyPg(
+  db: Queryable,
+  project: string,
+  key: string,
+  memoryId: number
+): Promise<void> {
+  await db.query(
+    `INSERT INTO memory_keys (project, memory_key, memory_id) VALUES ($1, $2, $3)
+     ON CONFLICT (project, memory_key) DO UPDATE SET memory_id = EXCLUDED.memory_id`,
+    [project, key, memoryId]
+  );
+}
+
+/** Mirrors hybridMemory.createConflict. */
+export async function createConflictPg(
+  db: Queryable,
+  project: string,
+  memoryId: number,
+  conflictingId: number,
+  reason: string
+): Promise<MemoryConflict> {
+  const open = await db.query<MemoryConflictRow>(
+    `SELECT * FROM memory_conflicts
+     WHERE project = $1 AND resolution_status = 'open'
+       AND ((memory_id = $2 AND conflicting_id = $3) OR (memory_id = $3 AND conflicting_id = $2))`,
+    [project, memoryId, conflictingId]
+  );
+  if (open.rows[0]) return mapConflict(open.rows[0]);
+  const { rows } = await db.query<MemoryConflictRow>(
+    `INSERT INTO memory_conflicts (project, memory_id, conflicting_id, reason)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [project, memoryId, conflictingId, reason]
+  );
+  return mapConflict(rows[0]);
 }
 
 export async function extractMemoriesPg(
@@ -162,31 +316,16 @@ export async function extractMemoriesPg(
 export async function listSemanticMemoriesPg(
   pool: Pool,
   project: string,
-  opts: {
-    status?: string;
-    lifecycleStatus?: string;
-    limit?: number;
-    offset?: number;
-  } = {}
+  opts: SemanticMemoryListOptions = {}
 ): Promise<SemanticMemory[]> {
-  const limit = opts.limit ?? 100;
-  const offset = opts.offset ?? 0;
-  const clauses = ["sm.project = $1"];
-  const params: Array<string | number> = [project];
-  if (opts.status) {
-    clauses.push(`sm.status = $${params.length + 1}`);
-    params.push(opts.status);
-  }
-  if (opts.lifecycleStatus) {
-    clauses.push(`COALESCE(ml.status, 'active') = $${params.length + 1}`);
-    params.push(opts.lifecycleStatus);
-  }
-  params.push(limit, offset);
+  const params: unknown[] = [project];
+  const bind = pgBinder(params);
+  const clauses = semanticListClauses(opts, bind, "sm.project = $1");
   const { rows } = await pool.query<SemanticMemoryRow>(
-    `${MEMORY_WITH_LIFECYCLE_SELECT}
+    `${PG_MEMORY_SELECT}
      WHERE ${clauses.join(" AND ")}
-     ORDER BY sm.importance DESC, sm.updated_at DESC
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+     ORDER BY ${semanticListOrder(opts)}
+     LIMIT ${bind(opts.limit ?? 100)} OFFSET ${bind(opts.offset ?? 0)}`,
     params
   );
   return rows.map(mapMemory);

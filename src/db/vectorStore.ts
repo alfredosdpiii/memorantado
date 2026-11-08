@@ -1,9 +1,7 @@
 import type Database from "better-sqlite3";
 
 export type EmbeddingTable =
-  | "memory_embeddings"
-  | "episode_embeddings"
-  | "claim_version_embeddings";
+  "memory_embeddings" | "episode_embeddings" | "claim_version_embeddings";
 
 export type EmbeddingIdColumn = "memory_id" | "episode_id" | "claim_version_id";
 

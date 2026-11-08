@@ -4,19 +4,29 @@ import { createLocalExtractor } from "../memory/extractor.js";
 import { semanticConflictReason } from "../memory/conflicts.js";
 import type {
   CandidateMemory,
+  ClaimVersion,
   Episode,
-  MemoryConflict,
+  EvidenceInput,
   SemanticMemory,
+  TagFilter,
 } from "../memory/types.js";
-import { getMemorySources } from "./hybridRetrieval.js";
 import {
-  mapConflict,
+  EPISODE_TAGS,
+  MEMORY_TAGS,
+  StateError,
+  normalizeTags,
+  tagPredicate,
+} from "../memory/tags.js";
+import { getMemorySources } from "./hybridRetrieval.js";
+import { createConflict } from "./memoryConflicts.js";
+import { sameClaim, successorClaim } from "./memoryRules.js";
+import {
+  episodeColumns,
   mapEpisode,
   mapMemory,
   MEMORY_WITH_LIFECYCLE_SELECT,
   normalizeScope,
   type EpisodeRow,
-  type MemoryConflictRow,
   type SemanticMemoryRow,
 } from "./hybridRows.js";
 import {
@@ -36,9 +46,30 @@ export type AppendEpisodeInput = {
   content: string;
   source?: string;
   metadata?: Record<string, unknown>;
+  tags?: string[];
 };
 
+const EPISODE_COLUMNS = episodeColumns("sqlite", "episodes");
+
 export function appendEpisode(
+  db: Database.Database,
+  project: string,
+  input: AppendEpisodeInput
+): Episode {
+  const tags = normalizeTags(input.tags);
+  const episode = db.transaction(() => {
+    const inserted = insertEpisode(db, project, input);
+    const insertTag = db.prepare(
+      "INSERT INTO episode_tags (episode_id, tag) VALUES (?, ?)"
+    );
+    for (const tag of tags) insertTag.run(inserted.id, tag);
+    return { ...inserted, tags };
+  })();
+  upsertEpisodeEmbedding(db, episode);
+  return episode;
+}
+
+function insertEpisode(
   db: Database.Database,
   project: string,
   input: AppendEpisodeInput
@@ -58,9 +89,7 @@ export function appendEpisode(
       input.source ?? null,
       input.metadata ? JSON.stringify(input.metadata) : null
     ) as EpisodeRow;
-  const episode = mapEpisode(row);
-  upsertEpisodeEmbedding(db, episode);
-  return episode;
+  return mapEpisode(row);
 }
 
 export function getEpisode(
@@ -69,13 +98,7 @@ export function getEpisode(
   id: number
 ): Episode | null {
   const row = db
-    .prepare(
-      `
-    SELECT id, project, session, actor, role, content, source, metadata_json, created_at
-    FROM episodes
-    WHERE project = ? AND id = ?
-  `
-    )
+    .prepare(`SELECT ${EPISODE_COLUMNS} FROM episodes WHERE project = ? AND id = ?`)
     .get(project, id) as EpisodeRow | undefined;
   return row ? mapEpisode(row) : null;
 }
@@ -83,36 +106,34 @@ export function getEpisode(
 export function listEpisodes(
   db: Database.Database,
   project: string,
-  opts: { limit?: number; offset?: number; session?: string } = {}
+  opts: { limit?: number; offset?: number; session?: string; tags?: TagFilter } = {}
 ): Episode[] {
-  const limit = opts.limit ?? 50;
-  const offset = opts.offset ?? 0;
-  if (opts.session) {
-    return (
-      db
-        .prepare(
-          `SELECT id, project, session, actor, role, content, source, metadata_json, created_at
-           FROM episodes WHERE project = ? AND session = ?
-           ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
-        )
-        .all(project, opts.session, limit, offset) as EpisodeRow[]
-    ).map(mapEpisode);
-  }
+  const params: Array<string | number> = [project];
+  const bind = (value: string | number) => {
+    params.push(value);
+    return "?";
+  };
+  const clauses = ["project = ?"];
+  if (opts.session) clauses.push(`session = ${bind(opts.session)}`);
+  if (opts.tags) clauses.push(tagPredicate(EPISODE_TAGS, "episodes.id", opts.tags, bind));
+  params.push(opts.limit ?? 50, opts.offset ?? 0);
   return (
     db
       .prepare(
-        `
-      SELECT id, project, session, actor, role, content, source, metadata_json, created_at
-      FROM episodes
-      WHERE project = ?
-      ORDER BY created_at DESC, id DESC
-      LIMIT ? OFFSET ?
-    `
+        `SELECT ${EPISODE_COLUMNS} FROM episodes
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       )
-      .all(project, limit, offset) as EpisodeRow[]
+      .all(...params) as EpisodeRow[]
   ).map(mapEpisode);
 }
 
+/**
+ * Stores a claim. An equivalent active claim with the same tags is
+ * reinforced. With a `key`, the key's current active memory is reinforced
+ * when the claim is unchanged and superseded otherwise; a new key starts a
+ * new memory. A differing exclusive claim with the same tags opens a conflict.
+ */
 export function upsertSemanticMemory(
   db: Database.Database,
   project: string,
@@ -120,26 +141,133 @@ export function upsertSemanticMemory(
   sourceEpisodeId?: number,
   evidence?: { quote?: string; spanStart?: number }
 ): SemanticMemory {
-  const memory = db.transaction(() => {
-    const existing = findActiveEquivalent(db, project, input);
-    if (existing) {
-      return reinforceMemory(db, existing, input, sourceEpisodeId, evidence);
+  const tags = normalizeTags(input.tags);
+  const source = sourceEpisodeId ? { sourceEpisodeId, ...evidence } : undefined;
+  const memoryId = db.transaction(() => {
+    const keyed = input.key ? getMemoryByKey(db, project, input.key) : null;
+    if (keyed?.status === "active") {
+      return sameClaim(keyed, input)
+        ? reinforceMemory(db, keyed, input, source).id
+        : supersedeWithin(db, keyed, input, source).id;
     }
-    const conflicting = findConflictingMemory(db, project, input);
-    const inserted = insertSemanticMemory(db, project, input);
-    const version = insertClaimVersion(db, inserted, input);
-    if (sourceEpisodeId) {
-      const quote = evidence?.quote ?? input.content;
-      linkMemorySource(db, inserted.id, sourceEpisodeId, quote);
-      insertMemoryEvidence(db, version, sourceEpisodeId, quote, evidence?.spanStart);
-    }
+    const existing = input.key ? null : findActiveEquivalent(db, project, input, tags);
+    if (existing) return reinforceMemory(db, existing, input, source).id;
+    const conflicting = findConflictingMemory(db, project, input, tags);
+    const inserted = insertTaggedMemory(db, project, input, tags, source);
     if (conflicting) {
       createConflict(db, project, inserted.id, conflicting.memory.id, conflicting.reason);
     }
-    return inserted;
+    return inserted.id;
   })();
-  upsertMemoryEmbedding(db, memory);
-  return memory;
+  return getMemory(db, project, memoryId) as SemanticMemory;
+}
+
+/**
+ * Replaces the active memory `memoryId` with a new claim: the new memory
+ * supersedes it, inherits its tags, key, kind, scope and subject unless the
+ * input names them, and the old memory and its claim versions are retired.
+ * Null when the memory does not exist; throws when it is not active.
+ */
+export function supersedeMemory(
+  db: Database.Database,
+  project: string,
+  memoryId: number,
+  input: Partial<CandidateMemory> & { content: string },
+  evidence?: EvidenceInput
+): SemanticMemory | null {
+  const id = db.transaction(() => {
+    const old = getMemory(db, project, memoryId);
+    if (!old) return null;
+    return supersedeWithin(db, old, input, evidence).id;
+  })();
+  return id === null ? null : getMemory(db, project, id);
+}
+
+function supersedeWithin(
+  db: Database.Database,
+  old: SemanticMemory,
+  input: Partial<CandidateMemory> & { content: string },
+  evidence?: EvidenceInput
+): SemanticMemory {
+  if (old.status !== "active") throw new StateError(`memory ${old.id} is ${old.status}`);
+  const timestamp = new Date().toISOString();
+  db.prepare(
+    `UPDATE semantic_memories SET status = 'superseded', updated_at = ? WHERE id = ?`
+  ).run(timestamp, old.id);
+  db.prepare(
+    `UPDATE claim_versions SET status = 'superseded', retracted_at = COALESCE(retracted_at, ?)
+     WHERE memory_id = ? AND status = 'active'`
+  ).run(timestamp, old.id);
+  const key = old.key;
+  if (key) db.prepare("DELETE FROM memory_keys WHERE memory_id = ?").run(old.id);
+  const next = insertTaggedMemory(
+    db,
+    old.project,
+    successorClaim(old, input),
+    input.tags ? normalizeTags(input.tags) : old.tags,
+    evidence,
+    { supersedesId: old.id, supersedesVersionId: latestClaimVersionId(db, old.id) }
+  );
+  if (key) assignKey(db, old.project, key, next.id);
+  return next;
+}
+
+function insertTaggedMemory(
+  db: Database.Database,
+  project: string,
+  input: CandidateMemory,
+  tags: string[],
+  evidence?: EvidenceInput,
+  chain: { supersedesId?: number; supersedesVersionId?: number } = {}
+): SemanticMemory {
+  const inserted = insertSemanticMemory(db, project, input, chain.supersedesId);
+  const insertTag = db.prepare("INSERT INTO memory_tags (memory_id, tag) VALUES (?, ?)");
+  for (const tag of tags) insertTag.run(inserted.id, tag);
+  if (input.key) assignKey(db, project, input.key, inserted.id);
+  const version = insertClaimVersion(db, inserted, input, chain.supersedesVersionId);
+  if (evidence) attachEvidence(db, inserted.id, version, evidence, input.content);
+  upsertMemoryEmbedding(db, inserted);
+  return inserted;
+}
+
+/** Links quoted evidence from an episode to a memory's claim version. */
+export function attachEvidence(
+  db: Database.Database,
+  memoryId: number,
+  version: ClaimVersion,
+  evidence: EvidenceInput,
+  fallbackQuote: string
+): void {
+  const quote = evidence.quote ?? fallbackQuote;
+  linkMemorySource(db, memoryId, evidence.sourceEpisodeId, quote);
+  insertMemoryEvidence(db, version, evidence.sourceEpisodeId, quote, evidence.spanStart);
+}
+
+export function getMemoryByKey(
+  db: Database.Database,
+  project: string,
+  key: string
+): SemanticMemory | null {
+  const row = db
+    .prepare(
+      `${MEMORY_WITH_LIFECYCLE_SELECT}
+       JOIN memory_keys mk ON mk.memory_id = sm.id
+       WHERE mk.project = ? AND mk.memory_key = ?`
+    )
+    .get(project, key) as SemanticMemoryRow | undefined;
+  return row ? mapMemory(row) : null;
+}
+
+function assignKey(
+  db: Database.Database,
+  project: string,
+  key: string,
+  memoryId: number
+): void {
+  db.prepare(
+    `INSERT INTO memory_keys (project, memory_key, memory_id) VALUES (?, ?, ?)
+     ON CONFLICT(project, memory_key) DO UPDATE SET memory_id = excluded.memory_id`
+  ).run(project, key, memoryId);
 }
 
 export async function extractMemories(
@@ -160,71 +288,6 @@ export async function extractMemories(
   );
 }
 
-export function listSemanticMemories(
-  db: Database.Database,
-  project: string,
-  opts: {
-    status?: string;
-    lifecycleStatus?: "active" | "archived";
-    limit?: number;
-    offset?: number;
-  } = {}
-): SemanticMemory[] {
-  const limit = opts.limit ?? 100;
-  const offset = opts.offset ?? 0;
-  const clauses = ["sm.project = ?"];
-  const params: Array<string | number> = [project];
-  if (opts.status) {
-    clauses.push("sm.status = ?");
-    params.push(opts.status);
-  }
-  if (opts.lifecycleStatus) {
-    clauses.push("COALESCE(ml.status, 'active') = ?");
-    params.push(opts.lifecycleStatus);
-  }
-  params.push(limit, offset);
-  return (
-    db
-      .prepare(
-        `${MEMORY_WITH_LIFECYCLE_SELECT}
-         WHERE ${clauses.join(" AND ")}
-         ORDER BY sm.importance DESC, sm.updated_at DESC
-         LIMIT ? OFFSET ?`
-      )
-      .all(...params) as SemanticMemoryRow[]
-  ).map(mapMemory);
-}
-
-export function setMemoryLifecycle(
-  db: Database.Database,
-  project: string,
-  memoryId: number,
-  status: "active" | "archived",
-  reason?: string
-): SemanticMemory | null {
-  const exists = db
-    .prepare("SELECT 1 FROM semantic_memories WHERE project = ? AND id = ?")
-    .get(project, memoryId);
-  if (!exists) return null;
-  const timestamp = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO memory_lifecycle (memory_id, status, reason, archived_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(memory_id) DO UPDATE SET
-       status = excluded.status,
-       reason = excluded.reason,
-       archived_at = excluded.archived_at,
-       updated_at = excluded.updated_at`
-  ).run(
-    memoryId,
-    status,
-    status === "archived" ? reason?.trim() || null : null,
-    status === "archived" ? timestamp : null,
-    timestamp
-  );
-  return getMemory(db, project, memoryId);
-}
-
 export function explainMemory(
   db: Database.Database,
   project: string,
@@ -239,112 +302,11 @@ export function explainMemory(
   );
 }
 
-export function listConflicts(
-  db: Database.Database,
-  project: string,
-  status = "open"
-): MemoryConflict[] {
-  return (
-    db
-      .prepare(
-        `
-      SELECT * FROM memory_conflicts
-      WHERE project = ? AND resolution_status = ?
-      ORDER BY created_at DESC
-    `
-      )
-      .all(project, status) as MemoryConflictRow[]
-  ).map(mapConflict);
-}
-
-export function resolveConflict(
-  db: Database.Database,
-  project: string,
-  conflictId: number,
-  resolvedMemoryId?: number,
-  status: "resolved" | "ignored" = "resolved",
-  audit: {
-    actor?: string;
-    reason?: string;
-    metadata?: Record<string, unknown>;
-  } = {}
-): MemoryConflict | null {
-  return db.transaction(() => {
-    const conflict = db
-      .prepare("SELECT * FROM memory_conflicts WHERE project = ? AND id = ?")
-      .get(project, conflictId) as MemoryConflictRow | undefined;
-    if (!conflict) return null;
-    if (status === "resolved") {
-      const winnerId = resolvedMemoryId ?? conflict.memory_id;
-      if (winnerId !== conflict.memory_id && winnerId !== conflict.conflicting_id) {
-        throw new Error("resolved memory must belong to the conflict");
-      }
-      const loserId =
-        winnerId === conflict.memory_id ? conflict.conflicting_id : conflict.memory_id;
-      applyResolutionLifecycle(db, project, winnerId, loserId);
-    }
-    const row = db
-      .prepare(
-        `UPDATE memory_conflicts
-         SET resolution_status = ?, resolved_memory_id = ?,
-             resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         WHERE project = ? AND id = ? RETURNING *`
-      )
-      .get(status, resolvedMemoryId ?? null, project, conflictId) as MemoryConflictRow;
-    db.prepare(
-      `INSERT INTO conflict_resolution_events (
-         conflict_id, project, action, resolved_memory_id, actor, reason, metadata_json
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      conflictId,
-      project,
-      status,
-      resolvedMemoryId ?? null,
-      audit.actor ?? null,
-      audit.reason ?? null,
-      audit.metadata ? JSON.stringify(audit.metadata) : null
-    );
-    return mapConflict(row);
-  })();
-}
-
-function applyResolutionLifecycle(
-  db: Database.Database,
-  project: string,
-  winnerId: number,
-  loserId: number
-): void {
-  const timestamp = new Date().toISOString();
-  db.prepare(
-    `UPDATE semantic_memories
-     SET status = 'active', supersedes_id = ?, updated_at = ?
-     WHERE project = ? AND id = ?`
-  ).run(loserId, timestamp, project, winnerId);
-  db.prepare(
-    `UPDATE semantic_memories
-     SET status = 'superseded', updated_at = ?
-     WHERE project = ? AND id = ?`
-  ).run(timestamp, project, loserId);
-  db.prepare(
-    `UPDATE claim_versions
-     SET status = 'superseded', retracted_at = COALESCE(retracted_at, ?)
-     WHERE project = ? AND memory_id = ? AND status = 'active'`
-  ).run(timestamp, project, loserId);
-  db.prepare(
-    `UPDATE claim_versions
-     SET status = 'active', retracted_at = NULL
-     WHERE id = (
-       SELECT id FROM claim_versions WHERE project = ? AND memory_id = ?
-       ORDER BY recorded_at DESC, id DESC LIMIT 1
-     )`
-  ).run(project, winnerId);
-}
 function reinforceMemory(
   db: Database.Database,
   existing: SemanticMemory,
   input: CandidateMemory,
-  sourceEpisodeId?: number,
-  evidence?: { quote?: string; spanStart?: number }
+  evidence?: EvidenceInput
 ): SemanticMemory {
   const row = db
     .prepare(
@@ -364,27 +326,24 @@ function reinforceMemory(
     input,
     latestClaimVersionId(db, memory.id)
   );
-  if (sourceEpisodeId) {
-    const quote = evidence?.quote ?? input.content;
-    linkMemorySource(db, row.id, sourceEpisodeId, quote);
-    insertMemoryEvidence(db, version, sourceEpisodeId, quote, evidence?.spanStart);
-  }
+  if (evidence) attachEvidence(db, row.id, version, evidence, input.content);
   return memory;
 }
 
 function insertSemanticMemory(
   db: Database.Database,
   project: string,
-  input: CandidateMemory
+  input: CandidateMemory,
+  supersedesId?: number
 ): SemanticMemory {
   const row = db
     .prepare(
       `
     INSERT INTO semantic_memories (
       project, scope, kind, subject, predicate, object, content, confidence,
-      importance, valid_from, valid_to, last_confirmed_at, metadata_json
+      importance, valid_from, valid_to, last_confirmed_at, metadata_json, supersedes_id
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?)
     RETURNING *
   `
     )
@@ -400,7 +359,8 @@ function insertSemanticMemory(
       input.importance ?? 0.5,
       input.validFrom ?? null,
       input.validTo ?? null,
-      input.metadata ? JSON.stringify(input.metadata) : null
+      input.metadata ? JSON.stringify(input.metadata) : null,
+      supersedesId ?? null
     ) as SemanticMemoryRow;
   return mapMemory(row);
 }
@@ -408,37 +368,67 @@ function insertSemanticMemory(
 function findActiveEquivalent(
   db: Database.Database,
   project: string,
-  input: CandidateMemory
+  input: CandidateMemory,
+  tags: string[]
 ): SemanticMemory | null {
+  const params: Array<string | number> = [
+    project,
+    input.subject,
+    input.predicate ?? "states",
+    input.content,
+  ];
+  const sameTags = tagPredicate(
+    MEMORY_TAGS,
+    "sm.id",
+    { tags, match: "exact" },
+    (value) => {
+      params.push(value);
+      return "?";
+    }
+  );
   const row = db
     .prepare(
       `${MEMORY_WITH_LIFECYCLE_SELECT}
        WHERE sm.project = ? AND sm.status = 'active'
          AND COALESCE(ml.status, 'active') = 'active'
          AND sm.subject = ? AND sm.predicate = ? AND sm.content = ?
+         AND ${sameTags}
        ORDER BY sm.updated_at DESC
        LIMIT 1`
     )
-    .get(project, input.subject, input.predicate ?? "states", input.content) as
-    | SemanticMemoryRow
-    | undefined;
+    .get(...params) as SemanticMemoryRow | undefined;
   return row ? mapMemory(row) : null;
 }
 function findConflictingMemory(
   db: Database.Database,
   project: string,
-  input: CandidateMemory
+  input: CandidateMemory,
+  tags: string[]
 ): { memory: SemanticMemory; reason: string } | null {
-  const predicate = input.predicate ?? "states";
+  const params: Array<string | number> = [
+    project,
+    input.subject,
+    input.predicate ?? "states",
+  ];
+  const sameTags = tagPredicate(
+    MEMORY_TAGS,
+    "sm.id",
+    { tags, match: "exact" },
+    (value) => {
+      params.push(value);
+      return "?";
+    }
+  );
   const rows = db
     .prepare(
       `${MEMORY_WITH_LIFECYCLE_SELECT}
        WHERE sm.project = ? AND sm.status = 'active'
          AND COALESCE(ml.status, 'active') = 'active'
          AND sm.subject = ? AND sm.predicate = ?
+         AND ${sameTags}
        ORDER BY sm.updated_at DESC`
     )
-    .all(project, input.subject, predicate) as SemanticMemoryRow[];
+    .all(...params) as SemanticMemoryRow[];
   for (const row of rows) {
     const memory = mapMemory(row);
     const reason = semanticConflictReason(memory, input);
@@ -447,7 +437,7 @@ function findConflictingMemory(
   return null;
 }
 
-function getMemory(
+export function getMemory(
   db: Database.Database,
   project: string,
   id: number
@@ -470,19 +460,6 @@ function linkMemorySource(
     VALUES (?, ?, ?)
   `
   ).run(memoryId, episodeId, quote);
-}
-
-function createConflict(
-  db: Database.Database,
-  project: string,
-  memoryId: number,
-  conflictingId: number,
-  reason: string
-): void {
-  db.prepare(
-    `INSERT INTO memory_conflicts (project, memory_id, conflicting_id, reason)
-     VALUES (?, ?, ?, ?)`
-  ).run(project, memoryId, conflictingId, reason);
 }
 
 function upsertMemoryEmbedding(db: Database.Database, memory: SemanticMemory): void {

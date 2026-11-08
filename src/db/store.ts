@@ -1,6 +1,7 @@
 import type { Graph, GraphEntity, GraphRelation } from "./graph.js";
 import type { MemoryItem } from "./timeline.js";
 import type { AppendEpisodeInput } from "./hybridMemory.js";
+import type { SemanticMemoryListOptions } from "./memoryRules.js";
 import type { RetrievalOptions } from "./hybridRetrieval.js";
 import type { MemoryExplanation } from "./temporalMemory.js";
 import type { RetrievalEvaluationResult } from "../bench/memoryEvaluation.js";
@@ -9,8 +10,12 @@ import type {
   CandidateMemory,
   ContextPack,
   Episode,
+  EvidenceInput,
+  FileSnapshot,
   MemoryConflict,
   SemanticMemory,
+  StaleFileEvidence,
+  TagFilter,
 } from "../memory/types.js";
 
 export type StoreKind = "sqlite" | "pg";
@@ -99,7 +104,7 @@ export interface MemoryStore {
   getEpisode(project: string, id: number): Promise<Episode | null>;
   listEpisodes(
     project: string,
-    opts?: { limit?: number; offset?: number; session?: string }
+    opts?: { limit?: number; offset?: number; session?: string; tags?: TagFilter }
   ): Promise<Episode[]>;
   upsertSemanticMemory(
     project: string,
@@ -110,13 +115,43 @@ export interface MemoryStore {
   extractMemories(project: string, episodeId: number): Promise<SemanticMemory[]>;
   listSemanticMemories(
     project: string,
-    opts?: {
-      status?: string;
-      lifecycleStatus?: "active" | "archived";
-      limit?: number;
-      offset?: number;
-    }
+    opts?: SemanticMemoryListOptions
   ): Promise<SemanticMemory[]>;
+
+  // Curation (src/db/hybridMemory.ts, src/db/memoryCuration.ts)
+  getSemanticMemory(project: string, memoryId: number): Promise<SemanticMemory | null>;
+  getSemanticMemoryByKey(project: string, key: string): Promise<SemanticMemory | null>;
+  supersedeMemory(
+    project: string,
+    memoryId: number,
+    input: Partial<CandidateMemory> & { content: string },
+    evidence?: EvidenceInput
+  ): Promise<SemanticMemory | null>;
+  confirmMemory(
+    project: string,
+    memoryId: number,
+    evidence?: EvidenceInput
+  ): Promise<SemanticMemory | null>;
+  invalidateMemory(
+    project: string,
+    memoryId: number,
+    reason?: string
+  ): Promise<SemanticMemory | null>;
+  deleteSemanticMemory(project: string, memoryId: number): Promise<boolean>;
+  createConflict(
+    project: string,
+    memoryId: number,
+    conflictingId: number,
+    reason: string
+  ): Promise<MemoryConflict | null>;
+  recordFileSnapshot(
+    project: string,
+    input: { source: string; content: string; session?: string; tags?: string[] }
+  ): Promise<{ snapshot: FileSnapshot; episode: Episode | null; created: boolean }>;
+  findStaleFileEvidence(
+    project: string,
+    files: Array<{ source: string; contentHash: string }>
+  ): Promise<StaleFileEvidence[]>;
   setMemoryLifecycle(
     project: string,
     memoryId: number,

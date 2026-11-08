@@ -4,9 +4,9 @@ import path from "node:path";
 
 export default defineConfig({
   plugins: [svelte()],
-  root: path.resolve(__dirname),
+  root: path.resolve(import.meta.dirname),
   build: {
-    outDir: path.resolve(__dirname, "../dist/web"),
+    outDir: path.resolve(import.meta.dirname, "../dist/web"),
     emptyOutDir: true,
   },
   server: {

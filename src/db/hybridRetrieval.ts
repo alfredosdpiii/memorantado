@@ -15,22 +15,27 @@ import type {
   MemoryConflict,
   RetrievalHit,
   RetrievalMode,
-  SemanticMemory,
+  TagFilter,
 } from "../memory/types.js";
+import { MEMORY_TAGS, sqliteBinder, tagPredicate } from "../memory/tags.js";
 import {
+  listActiveMemories,
+  listRecentEpisodes,
+  searchEpisodeFts,
+  searchMemoryFts,
+} from "./retrievalChannels.js";
+import {
+  episodeColumns,
   estimateTokens,
   ftsQuery,
   inferIntent,
   mapClaimVersion,
   mapConflict,
   mapEpisode,
-  mapMemory,
-  MEMORY_WITH_LIFECYCLE_SELECT,
   overlapScore,
   type ClaimVersionRow,
   type EpisodeRow,
   type MemoryConflictRow,
-  type SemanticMemoryRow,
 } from "./hybridRows.js";
 export type RetrievalOptions = {
   limit?: number;
@@ -38,6 +43,17 @@ export type RetrievalOptions = {
   mode?: RetrievalMode;
   asOf?: string;
   recordedAt?: string;
+  /** Scope: only memories and episodes whose tags match; the graph is skipped. */
+  tags?: TagFilter;
+};
+
+const EPISODE_COLUMNS = episodeColumns("sqlite", "e");
+
+type Temporal = {
+  mode: RetrievalMode;
+  asOf: string | null;
+  recordedAt: string | null;
+  tags?: TagFilter;
 };
 
 const DEFAULT_LIMIT = 8;
@@ -61,15 +77,18 @@ export async function retrieveContext(
       mode,
       asOf,
       recordedAt,
+      tags: opts.tags,
     })
   )
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-  const episodes = (await collectEpisodeHits(db, project, query, limit * 2))
+  const episodes = (await collectEpisodeHits(db, project, query, limit * 2, opts.tags))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
   const conflicts = listOpenConflictsForHits(db, project, memories);
-  const graph = graphDb.searchNodes(db, project, query);
+  const graph = opts.tags
+    ? { entities: [], relations: [] }
+    : graphDb.searchNodes(db, project, query);
   const context = renderContext(memories, episodes, conflicts, graph, tokenBudget);
   const pack: ContextPack = {
     query,
@@ -95,8 +114,7 @@ export function getMemorySources(db: Database.Database, memoryId: number): Episo
     db
       .prepare(
         `
-        SELECT e.id, e.project, e.session, e.actor, e.role, e.content, e.source,
-               e.metadata_json, e.created_at
+        SELECT ${EPISODE_COLUMNS}
         FROM memory_sources ms
         JOIN episodes e ON e.id = ms.episode_id
         WHERE ms.memory_id = ?
@@ -112,19 +130,15 @@ async function collectMemoryHits(
   project: string,
   query: string,
   limit: number,
-  temporal: {
-    mode: RetrievalMode;
-    asOf: string | null;
-    recordedAt: string | null;
-  }
+  temporal: Temporal
 ): Promise<RetrievalHit[]> {
   if (temporal.mode !== "current") {
     return collectVersionHits(db, project, query, limit, temporal);
   }
   const queryEmbedding = await embedConfiguredText(query);
-  const memories = listActiveMemories(db, project, MAX_RETRIEVAL_SCAN);
+  const memories = listActiveMemories(db, project, MAX_RETRIEVAL_SCAN, temporal.tags);
   const byId = new Map(memories.map((memory) => [memory.id, memory]));
-  const bm25 = searchMemoryFts(db, project, query, limit * 4);
+  const bm25 = searchMemoryFts(db, project, query, limit * 4, temporal.tags);
   const vector = memories
     .map((memory) => ({
       id: memory.id,
@@ -188,11 +202,7 @@ function collectVersionHits(
   project: string,
   query: string,
   limit: number,
-  temporal: {
-    mode: RetrievalMode;
-    asOf: string | null;
-    recordedAt: string | null;
-  }
+  temporal: Temporal
 ): RetrievalHit[] {
   const versions = listClaimVersionsForRetrieval(
     db,
@@ -270,15 +280,21 @@ function collectVersionHits(
 function listClaimVersionsForRetrieval(
   db: Database.Database,
   project: string,
-  temporal: {
-    mode: RetrievalMode;
-    asOf: string | null;
-    recordedAt: string | null;
-  },
+  temporal: Temporal,
   limit: number
 ): ClaimVersion[] {
   const clauses = ["project = ?"];
   const params: Array<string | number> = [project];
+  if (temporal.tags) {
+    clauses.push(
+      tagPredicate(
+        MEMORY_TAGS,
+        "claim_versions.memory_id",
+        temporal.tags,
+        sqliteBinder(params)
+      )
+    );
+  }
   if (temporal.recordedAt) {
     clauses.push("recorded_at <= ?", "(retracted_at IS NULL OR retracted_at > ?)");
     params.push(temporal.recordedAt, temporal.recordedAt);
@@ -311,8 +327,7 @@ function getVersionSources(db: Database.Database, versionId: number): Episode[] 
     db
       .prepare(
         `
-        SELECT DISTINCT e.id, e.project, e.session, e.actor, e.role, e.content,
-               e.source, e.metadata_json, e.created_at
+        SELECT DISTINCT ${EPISODE_COLUMNS}
         FROM memory_evidence me
         JOIN episodes e ON e.id = me.episode_id
         WHERE me.claim_version_id = ?
@@ -347,12 +362,13 @@ async function collectEpisodeHits(
   db: Database.Database,
   project: string,
   query: string,
-  limit: number
+  limit: number,
+  tags?: TagFilter
 ): Promise<RetrievalHit[]> {
   const queryEmbedding = await embedConfiguredText(query);
-  const episodes = listRecentEpisodes(db, project, MAX_RETRIEVAL_SCAN);
+  const episodes = listRecentEpisodes(db, project, MAX_RETRIEVAL_SCAN, tags);
   const byId = new Map(episodes.map((episode) => [episode.id, episode]));
-  const bm25 = searchEpisodeFts(db, project, query, limit * 4);
+  const bm25 = searchEpisodeFts(db, project, query, limit * 4, tags);
   const vector = episodes
     .map((episode) => ({
       id: episode.id,
@@ -406,88 +422,6 @@ async function collectEpisodeHits(
         },
       ];
     });
-}
-
-function listActiveMemories(
-  db: Database.Database,
-  project: string,
-  limit: number
-): SemanticMemory[] {
-  return (
-    db
-      .prepare(
-        `${MEMORY_WITH_LIFECYCLE_SELECT}
-         WHERE sm.project = ? AND sm.status = 'active'
-           AND COALESCE(ml.status, 'active') = 'active'
-         ORDER BY sm.importance DESC, sm.updated_at DESC
-         LIMIT ?`
-      )
-      .all(project, limit) as SemanticMemoryRow[]
-  ).map(mapMemory);
-}
-
-function listRecentEpisodes(
-  db: Database.Database,
-  project: string,
-  limit: number
-): Episode[] {
-  return (
-    db
-      .prepare(
-        `
-      SELECT id, project, session, actor, role, content, source, metadata_json, created_at
-      FROM episodes
-      WHERE project = ?
-      ORDER BY created_at DESC, id DESC
-      LIMIT ?
-    `
-      )
-      .all(project, limit) as EpisodeRow[]
-  ).map(mapEpisode);
-}
-
-function searchMemoryFts(
-  db: Database.Database,
-  project: string,
-  query: string,
-  limit: number
-): Array<{ id: number; score: number }> {
-  const match = ftsQuery(query);
-  if (!match) return [];
-  return db
-    .prepare(
-      `
-      SELECT sm.id, bm25(semantic_memories_fts) AS score
-      FROM semantic_memories_fts
-      JOIN semantic_memories sm ON sm.id = semantic_memories_fts.rowid
-      LEFT JOIN memory_lifecycle ml ON ml.memory_id = sm.id
-      WHERE semantic_memories_fts.project = ? AND sm.status = 'active'
-        AND COALESCE(ml.status, 'active') = 'active'
-        AND semantic_memories_fts MATCH ?
-      ORDER BY score ASC, sm.id ASC
-      LIMIT ?
-    `
-    )
-    .all(project, match, limit) as Array<{ id: number; score: number }>;
-}
-
-function searchEpisodeFts(
-  db: Database.Database,
-  project: string,
-  query: string,
-  limit: number
-): Array<{ id: number; score: number }> {
-  const match = ftsQuery(query);
-  if (!match) return [];
-  return db
-    .prepare(
-      `SELECT e.id, bm25(episodes_fts) AS score
-       FROM episodes_fts
-       JOIN episodes e ON e.id = episodes_fts.rowid
-       WHERE episodes_fts.project = ? AND episodes_fts MATCH ?
-       ORDER BY score ASC, e.id ASC LIMIT ?`
-    )
-    .all(project, match, limit) as Array<{ id: number; score: number }>;
 }
 
 function listOpenConflictsForHits(

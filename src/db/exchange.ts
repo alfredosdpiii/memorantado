@@ -20,7 +20,23 @@ const TABLES = [
   "claim_versions",
   "memory_evidence",
   "conflict_resolution_events",
+  "memory_tags",
+  "episode_tags",
+  "memory_keys",
+  "file_snapshots",
 ] as const;
+
+/** Tag tables carry no project; they follow their owner rows. */
+export const TAG_OWNERS = {
+  memory_tags: { owner: "semantic_memories", column: "memory_id" },
+  episode_tags: { owner: "episodes", column: "episode_id" },
+} as const;
+
+/** Export order of tables without an id column. */
+export const EXPORT_ORDER: Partial<Record<string, string>> = {
+  memory_keys: "memory_key",
+  file_snapshots: "episode_id",
+};
 
 export function exportProjectJsonl(db: Database.Database, project: string): string {
   const records: ExchangeRecord[] = [];
@@ -112,9 +128,19 @@ function readProjectRows(
       )
       .all(project) as Array<Record<string, unknown>>;
   }
-  const order = type === "episodes" || type === "semantic_memories" ? "id" : "id";
+  if (type === "memory_tags" || type === "episode_tags") {
+    const { owner, column } = TAG_OWNERS[type];
+    return db
+      .prepare(
+        `SELECT tg.* FROM ${type} tg JOIN ${owner} o ON o.id = tg.${column}
+         WHERE o.project = ? ORDER BY tg.${column}, tg.tag`
+      )
+      .all(project) as Array<Record<string, unknown>>;
+  }
   return db
-    .prepare(`SELECT * FROM ${type} WHERE project = ? ORDER BY ${order}`)
+    .prepare(
+      `SELECT * FROM ${type} WHERE project = ? ORDER BY ${EXPORT_ORDER[type] ?? "id"}`
+    )
     .all(project) as Array<Record<string, unknown>>;
 }
 

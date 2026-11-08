@@ -276,6 +276,7 @@ The one structural difference is scale: SQLite scans at most the newest 5000 row
 npm run test:pg    # full vitest suite against the compose container (creates/destroys scratch DBs)
 npm run bench:memory   # parity benchmark on whichever backend env vars select
 npm run bench:scale    # 25k scenario on whichever backend env vars select
+npm run bench:ultron   # Ultron-style scoped recall on a throwaway store of either backend
 ```
 
 ## MCP Tools
@@ -429,13 +430,31 @@ For web UI and programmatic access:
 | `/api/episodes/:id/extract`               | POST   | Extract semantic memories                   |
 | `/api/semantic-memories?project=&status=` | GET    | List semantic memories                      |
 | `/api/semantic-memories`                  | POST   | Upsert semantic memory                      |
+| `/api/semantic-memories/:id`              | GET    | Get semantic memory                         |
+| `/api/semantic-memories/:id`              | DELETE | Forget semantic memory                      |
+| `/api/semantic-memories/by-key?key=`      | GET    | Current memory of a key                     |
+| `/api/semantic-memories/:id/supersede`    | POST   | Replace a memory with a new claim           |
+| `/api/semantic-memories/:id/confirm`      | POST   | Mark a memory re-verified                   |
+| `/api/semantic-memories/:id/invalidate`   | POST   | Retire a memory as wrong                    |
 | `/api/semantic-memories/:id/explain`      | GET    | Explain memory provenance                   |
 | `/api/retrieve-context`                   | POST   | Retrieve ranked context pack                |
 | `/api/memory-conflicts?project=&status=`  | GET    | List memory conflicts                       |
+| `/api/memory-conflicts`                   | POST   | Flag two memories as conflicting            |
 | `/api/memory-conflicts/:id/resolve`       | POST   | Resolve or ignore conflict                  |
+| `/api/file-snapshots`                     | POST   | Record a repository file version            |
+| `/api/file-snapshots/stale`               | POST   | Memories whose file evidence changed        |
 | `/api/memory-benchmark`                   | POST   | Run local synthetic benchmark               |
 
 Generated OpenAPI output is available in `docs/openapi.json` and can be refreshed with `npm run docs:openapi`.
+
+### Scoped memory for agents
+
+Agent clients (for example Ultron) keep one memorantado project and separate their scopes with tags:
+
+- **Tags** (`tags: string[]`) on semantic memories, episodes and file snapshots: opaque labels such as `ultron:session:<id>`, `ultron:project:<id>`, `ultron:global:<id>`. List and retrieval endpoints filter with `tags` and `tagsMatch`: `any` (at least one), `all`, or `exact` (the same set). Untagged rows never match a filter. A scoped retrieval skips the knowledge graph, which has no scopes. Equivalent claims are reinforced, and exclusive claims flagged as conflicts, only between memories with the same tags.
+- **Keys** (`key: string`): a client-chosen handle. Upserting a key again reinforces its memory when the claim is unchanged and supersedes it otherwise; the key follows the newest memory (`GET /api/semantic-memories/by-key`).
+- **Curation**: `supersede` (new claim, old one superseded, tags and key carried over), `confirm` (sets `lastConfirmedAt`, optionally with new evidence), `invalidate` (retired as wrong, reason kept in `metadata.invalidation`), `DELETE` (forget: the memory and the superseded versions it replaced, with their claim versions and evidence), and `POST /api/memory-conflicts` (flag a contradiction). `GET /api/semantic-memories?confirmedBefore=&sort=confirmed` lists the least recently confirmed memories first.
+- **File evidence**: `POST /api/file-snapshots` stores one version of `repo://<path>` as an episode (role `file`, deduplicated by SHA-256); memories cite it through `sourceEpisodeId` + `quote`. `POST /api/file-snapshots/stale` takes current file hashes and lists active memories whose evidence for a file never cites its current version.
 
 ## Benchmarks
 
@@ -450,6 +469,10 @@ Current synthetic score:
 | `bench:memory` | 2/2   | 100%     |
 
 This benchmark checks that local ingestion, extraction, retrieval, and benchmark persistence work together. It is intentionally small and synthetic.
+
+### Ultron-style scoped recall
+
+`npm run bench:ultron` loads a synthetic agent memory set (`src/bench/ultronMemorySet.ts`: three sessions, two repositories, one global scope, keyed claims later replaced or invalidated, file-quoting claims whose file then changes) into a throwaway store and measures recall as an agent turn does it (session + project + global tags, `any`): recall@5, MRR, scope leakage, retired-memory leakage, stale-evidence precision/recall and latency. Leakage must be 0 and stale detection exact; the test suite enforces both on each backend.
 
 ### Public memory benchmark harness
 

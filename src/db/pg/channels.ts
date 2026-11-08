@@ -3,11 +3,12 @@ import {
   embedText as embedLocalText,
 } from "../../memory/localEmbedding.js";
 import {
+  episodeColumns,
   mapClaimVersion,
   mapConflict,
   mapEpisode,
   mapMemory,
-  MEMORY_WITH_LIFECYCLE_SELECT,
+  PG_MEMORY_SELECT,
   significantWords,
   type ClaimVersionRow,
   type EpisodeRow,
@@ -20,8 +21,10 @@ import type {
   Episode,
   MemoryConflict,
   RetrievalHit,
+  TagFilter,
 } from "../../memory/types.js";
-import { toVectorLiteral, type Queryable } from "./client.js";
+import { EPISODE_TAGS, MEMORY_TAGS, tagPredicate } from "../../memory/tags.js";
+import { pgBinder, toVectorLiteral, type Queryable } from "./client.js";
 import type { RetrievalMode } from "../../memory/types.js";
 
 const MIN_VECTOR_RELEVANCE = 0.35;
@@ -30,7 +33,20 @@ export type PgTemporalFilter = {
   mode: RetrievalMode;
   asOf: string | null;
   recordedAt: string | null;
+  tags?: TagFilter;
 };
+
+const EPISODE_COLUMNS = episodeColumns("pg", "e");
+
+/** `AND <tag predicate>` over `owner`, bound into `params`; "" without a filter. */
+function scopeSql(
+  tags: TagFilter | undefined,
+  table: typeof MEMORY_TAGS,
+  owner: string,
+  params: unknown[]
+): string {
+  return tags ? `AND ${tagPredicate(table, owner, tags, pgBinder(params))}` : "";
+}
 
 /**
  * Mirrors hybridRows.ftsQuery tokenization: the same significant words
@@ -159,16 +175,19 @@ export async function searchMemoryFts(
   db: Queryable,
   project: string,
   words: string[],
-  limit: number
+  limit: number,
+  tags?: TagFilter
 ): Promise<Array<{ id: number; score: number }>> {
+  const params: unknown[] = [project];
+  const scoped = scopeSql(tags, MEMORY_TAGS, "t.id", params);
   return bm25Channel(
     db,
     "semantic_memories",
     `semantic_memories t
      LEFT JOIN memory_lifecycle ml ON ml.memory_id = t.id
      WHERE t.project = $1 AND t.status = 'active'
-       AND COALESCE(ml.status, 'active') = 'active'`,
-    [project],
+       AND COALESCE(ml.status, 'active') = 'active' ${scoped}`,
+    params,
     words,
     limit
   );
@@ -178,13 +197,16 @@ export async function searchEpisodeFts(
   db: Queryable,
   project: string,
   words: string[],
-  limit: number
+  limit: number,
+  tags?: TagFilter
 ): Promise<Array<{ id: number; score: number }>> {
+  const params: unknown[] = [project];
+  const scoped = scopeSql(tags, EPISODE_TAGS, "t.id", params);
   return bm25Channel(
     db,
     "episodes",
-    `episodes t WHERE t.project = $1`,
-    [project],
+    `episodes t WHERE t.project = $1 ${scoped}`,
+    params,
     words,
     limit
   );
@@ -218,18 +240,21 @@ export async function knnMemoryIds(
   db: Queryable,
   project: string,
   vector: number[],
-  limit: number
+  limit: number,
+  tags?: TagFilter
 ): Promise<Array<{ id: number; score: number }>> {
+  const params: unknown[] = [toVectorLiteral(vector), project];
+  const scoped = scopeSql(tags, MEMORY_TAGS, "sm.id", params);
   const { rows } = await db.query<{ id: number; distance: number }>(
     `SELECT me.memory_id AS id, me.embedding <=> $1::vector AS distance
      FROM memory_embeddings me
      JOIN semantic_memories sm ON sm.id = me.memory_id
      LEFT JOIN memory_lifecycle ml ON ml.memory_id = sm.id
      WHERE me.project = $2 AND me.provider = 'local-hash'
-       AND sm.status = 'active' AND COALESCE(ml.status, 'active') = 'active'
+       AND sm.status = 'active' AND COALESCE(ml.status, 'active') = 'active' ${scoped}
      ORDER BY distance ASC, me.memory_id ASC
-     LIMIT $3`,
-    [toVectorLiteral(vector), project, limit]
+     LIMIT ${pgBinder(params)(limit)}`,
+    params
   );
   // pgvector cosine distance d -> relevance = 1 - d, same threshold semantics
   // as sqlite's cosineSimilarity >= MIN_VECTOR_RELEVANCE filter.
@@ -242,15 +267,18 @@ export async function knnEpisodeIds(
   db: Queryable,
   project: string,
   vector: number[],
-  limit: number
+  limit: number,
+  tags?: TagFilter
 ): Promise<Array<{ id: number; score: number }>> {
+  const params: unknown[] = [toVectorLiteral(vector), project];
+  const scoped = scopeSql(tags, EPISODE_TAGS, "ee.episode_id", params);
   const { rows } = await db.query<{ id: number; distance: number }>(
     `SELECT ee.episode_id AS id, ee.embedding <=> $1::vector AS distance
      FROM episode_embeddings ee
-     WHERE ee.project = $2 AND ee.provider = 'local-hash'
+     WHERE ee.project = $2 AND ee.provider = 'local-hash' ${scoped}
      ORDER BY distance ASC, ee.episode_id ASC
-     LIMIT $3`,
-    [toVectorLiteral(vector), project, limit]
+     LIMIT ${pgBinder(params)(limit)}`,
+    params
   );
   return rows
     .map((row) => ({ id: row.id, score: 1 - row.distance }))
@@ -287,17 +315,20 @@ export async function knnClaimVersionIds(
 export async function exactMemoryVectorScan(
   db: Queryable,
   project: string,
-  queryEmbedding: { provider: string; vector: number[] }
+  queryEmbedding: { provider: string; vector: number[] },
+  tags?: TagFilter
 ): Promise<Array<{ id: number; score: number }>> {
+  const params: unknown[] = [project, queryEmbedding.provider];
+  const scoped = scopeSql(tags, MEMORY_TAGS, "sm.id", params);
   const { rows } = await db.query<{ id: number; vector_json: string }>(
     `SELECT me.memory_id AS id, me.vector_json
      FROM memory_embeddings me
      JOIN semantic_memories sm ON sm.id = me.memory_id
      LEFT JOIN memory_lifecycle ml ON ml.memory_id = sm.id
      WHERE me.project = $1 AND me.provider = $2
-       AND sm.status = 'active' AND COALESCE(ml.status, 'active') = 'active'
+       AND sm.status = 'active' AND COALESCE(ml.status, 'active') = 'active' ${scoped}
      ORDER BY me.memory_id ASC`,
-    [project, queryEmbedding.provider]
+    params
   );
   return rankExactScan(queryEmbedding.vector, rows);
 }
@@ -305,14 +336,17 @@ export async function exactMemoryVectorScan(
 export async function exactEpisodeVectorScan(
   db: Queryable,
   project: string,
-  queryEmbedding: { provider: string; vector: number[] }
+  queryEmbedding: { provider: string; vector: number[] },
+  tags?: TagFilter
 ): Promise<Array<{ id: number; score: number }>> {
+  const params: unknown[] = [project, queryEmbedding.provider];
+  const scoped = scopeSql(tags, EPISODE_TAGS, "ee.episode_id", params);
   const { rows } = await db.query<{ id: number; vector_json: string }>(
     `SELECT ee.episode_id AS id, ee.vector_json
      FROM episode_embeddings ee
-     WHERE ee.project = $1 AND ee.provider = $2
+     WHERE ee.project = $1 AND ee.provider = $2 ${scoped}
      ORDER BY ee.episode_id ASC`,
-    [project, queryEmbedding.provider]
+    params
   );
   return rankExactScan(queryEmbedding.vector, rows);
 }
@@ -339,7 +373,7 @@ export async function fetchMemoriesByIds(
   ids: number[]
 ): Promise<ReturnType<typeof mapMemory>[]> {
   const { rows } = await db.query<SemanticMemoryRow>(
-    `${MEMORY_WITH_LIFECYCLE_SELECT} WHERE sm.id = ANY($1)`,
+    `${PG_MEMORY_SELECT} WHERE sm.id = ANY($1)`,
     [ids]
   );
   return rows.map(mapMemory);
@@ -350,8 +384,7 @@ export async function fetchEpisodesByIds(
   ids: number[]
 ): Promise<Episode[]> {
   const { rows } = await db.query<EpisodeRow>(
-    `SELECT id, project, session, actor, role, content, source, metadata_json, created_at
-     FROM episodes WHERE id = ANY($1)`,
+    `SELECT ${EPISODE_COLUMNS} FROM episodes e WHERE e.id = ANY($1)`,
     [ids]
   );
   return rows.map(mapEpisode);
@@ -378,26 +411,28 @@ export async function listClaimVersionsForRetrieval(
 function temporalClauses(
   temporal: PgTemporalFilter,
   startIndex: number
-): { clauses: string[]; params: string[] } {
+): { clauses: string[]; params: Array<string | number> } {
   const clauses: string[] = [];
-  const params: string[] = [];
-  let index = startIndex;
+  const params: Array<string | number> = [];
+  const bind = (value: string | number) => {
+    params.push(value);
+    return `$${startIndex + params.length - 1}`;
+  };
   if (temporal.recordedAt) {
     clauses.push(
-      `cv.recorded_at <= $${index}`,
-      `(cv.retracted_at IS NULL OR cv.retracted_at > $${index + 1})`
+      `cv.recorded_at <= ${bind(temporal.recordedAt)}`,
+      `(cv.retracted_at IS NULL OR cv.retracted_at > ${bind(temporal.recordedAt)})`
     );
-    params.push(temporal.recordedAt, temporal.recordedAt);
-    index += 2;
   }
   if (temporal.mode === "as_of") {
     if (!temporal.asOf) throw new Error("asOf is required when mode is as_of");
-    clauses.push(`(cv.valid_from IS NULL OR cv.valid_from <= $${index})`);
-    clauses.push(`(cv.valid_to IS NULL OR cv.valid_to > $${index + 1})`);
-    params.push(temporal.asOf, temporal.asOf);
+    clauses.push(`(cv.valid_from IS NULL OR cv.valid_from <= ${bind(temporal.asOf)})`);
+    clauses.push(`(cv.valid_to IS NULL OR cv.valid_to > ${bind(temporal.asOf)})`);
   } else if (temporal.mode === "history") {
     clauses.push("(cv.valid_from IS NOT NULL OR cv.valid_to IS NOT NULL)");
   }
+  if (temporal.tags)
+    clauses.push(tagPredicate(MEMORY_TAGS, "cv.memory_id", temporal.tags, bind));
   return { clauses, params };
 }
 
@@ -410,8 +445,7 @@ export async function getMemorySourcesPg(
   memoryId: number
 ): Promise<Episode[]> {
   const { rows } = await db.query<EpisodeRow>(
-    `SELECT e.id, e.project, e.session, e.actor, e.role, e.content, e.source,
-            e.metadata_json, e.created_at
+    `SELECT ${EPISODE_COLUMNS}
      FROM memory_sources ms
      JOIN episodes e ON e.id = ms.episode_id
      WHERE ms.memory_id = $1
@@ -427,8 +461,7 @@ export async function getVersionSourcesPg(
   versionId: number
 ): Promise<Episode[]> {
   const { rows } = await db.query<EpisodeRow>(
-    `SELECT DISTINCT e.id, e.project, e.session, e.actor, e.role, e.content,
-            e.source, e.metadata_json, e.created_at
+    `SELECT DISTINCT ${EPISODE_COLUMNS}
      FROM memory_evidence me
      JOIN episodes e ON e.id = me.episode_id
      WHERE me.claim_version_id = $1

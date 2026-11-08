@@ -9,9 +9,7 @@ import { toVectorLiteral, type Pool, type Queryable } from "./client.js";
 const LOCAL_HASH_PROVIDER = "local-hash";
 
 type EmbeddingTable =
-  | "memory_embeddings"
-  | "episode_embeddings"
-  | "claim_version_embeddings";
+  "memory_embeddings" | "episode_embeddings" | "claim_version_embeddings";
 type EmbeddingOwnerColumn = "memory_id" | "episode_id" | "claim_version_id";
 
 function embeddingTarget(target: "memory" | "episode" | "claim_version"): {

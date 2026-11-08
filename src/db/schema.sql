@@ -325,6 +325,45 @@ CREATE INDEX IF NOT EXISTS idx_memory_lifecycle_status
   ON memory_lifecycle(status, updated_at DESC);
 
 --------------------------------------------------------------------------------
+-- SCOPES, KEYS AND FILE EVIDENCE
+-- Tags scope memories and episodes (for example ultron:session:<id>). A key is
+-- a client-chosen handle that follows the current memory of a superseded
+-- chain. A file snapshot is the episode that holds one version (by content
+-- hash) of a repository file named repo://<path>.
+--------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS memory_tags (
+  memory_id INTEGER NOT NULL REFERENCES semantic_memories(id) ON DELETE CASCADE,
+  tag       TEXT NOT NULL,
+  PRIMARY KEY (memory_id, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag, memory_id);
+
+CREATE TABLE IF NOT EXISTS episode_tags (
+  episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  tag        TEXT NOT NULL,
+  PRIMARY KEY (episode_id, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_episode_tags_tag ON episode_tags(tag, episode_id);
+
+CREATE TABLE IF NOT EXISTS memory_keys (
+  project    TEXT NOT NULL,
+  memory_key TEXT NOT NULL,
+  memory_id  INTEGER NOT NULL UNIQUE REFERENCES semantic_memories(id) ON DELETE CASCADE,
+  PRIMARY KEY (project, memory_key)
+);
+
+CREATE TABLE IF NOT EXISTS file_snapshots (
+  episode_id   INTEGER PRIMARY KEY REFERENCES episodes(id) ON DELETE CASCADE,
+  project      TEXT NOT NULL,
+  source       TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (project, source, content_hash)
+);
+
+--------------------------------------------------------------------------------
 -- TRIGGERS: entities -> entities_fts
 --------------------------------------------------------------------------------
 

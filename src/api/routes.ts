@@ -4,7 +4,11 @@ import { resolveProject } from "../mcp/project.js";
 import { isFeatureEnabled } from "../featureFlags.js";
 import type { HttpMetrics } from "../observability.js";
 import type { MemoryStore } from "../db/store.js";
-import type { CandidateMemory } from "../memory/types.js";
+import type { CandidateMemory, TagMatch } from "../memory/types.js";
+import { InputError, parseTagFilter, StateError } from "../memory/tags.js";
+import { evidenceFrom, registerCurationRoutes } from "./curationRoutes.js";
+
+type TagQuery = { tags?: string; tagsMatch?: TagMatch };
 
 type RegisterApiRoutesOpts = {
   store: MemoryStore;
@@ -16,6 +20,17 @@ export function registerApiRoutes(
   opts: RegisterApiRoutesOpts
 ): void {
   const { store, metrics } = opts;
+
+  app.setErrorHandler((error, _req, reply) => {
+    if (error instanceof InputError || error instanceof StateError) {
+      reply.code(error instanceof InputError ? 400 : 409);
+      return {
+        error: error instanceof InputError ? "invalid_input" : "conflict",
+        message: error.message,
+      };
+    }
+    throw error;
+  });
 
   app.get("/api/health", async () => {
     return {
@@ -223,11 +238,17 @@ export function registerApiRoutes(
   });
 
   app.get<{
-    Querystring: { project?: string; session?: string; limit?: string; offset?: string };
+    Querystring: TagQuery & {
+      project?: string;
+      session?: string;
+      limit?: string;
+      offset?: string;
+    };
   }>("/api/episodes", async (req) => {
     const project = resolveProject(req.query.project);
     return store.listEpisodes(project, {
       session: req.query.session,
+      tags: parseTagFilter(req.query.tags, req.query.tagsMatch),
       limit: req.query.limit ? parseInt(req.query.limit, 10) : 50,
       offset: req.query.offset ? parseInt(req.query.offset, 10) : 0,
     });
@@ -242,6 +263,7 @@ export function registerApiRoutes(
       content: string;
       source?: string;
       metadata?: Record<string, unknown>;
+      tags?: string[];
       extract?: boolean;
     };
   }>("/api/episodes", async (req) => {
@@ -253,6 +275,7 @@ export function registerApiRoutes(
       content: req.body.content,
       source: req.body.source,
       metadata: req.body.metadata,
+      tags: req.body.tags,
     });
     const memories = req.body.extract
       ? await store.extractMemories(project, episode.id)
@@ -284,10 +307,13 @@ export function registerApiRoutes(
   });
 
   app.get<{
-    Querystring: {
+    Querystring: TagQuery & {
       project?: string;
       status?: string;
       lifecycleStatus?: "active" | "archived";
+      confirmedBefore?: string;
+      confirmedAfter?: string;
+      sort?: "importance" | "confirmed";
       limit?: string;
       offset?: string;
     };
@@ -296,6 +322,10 @@ export function registerApiRoutes(
     return store.listSemanticMemories(project, {
       status: req.query.status,
       lifecycleStatus: req.query.lifecycleStatus,
+      tags: parseTagFilter(req.query.tags, req.query.tagsMatch),
+      confirmedBefore: req.query.confirmedBefore,
+      confirmedAfter: req.query.confirmedAfter,
+      sort: req.query.sort,
       limit: req.query.limit ? parseInt(req.query.limit, 10) : 100,
       offset: req.query.offset ? parseInt(req.query.offset, 10) : 0,
     });
@@ -305,10 +335,18 @@ export function registerApiRoutes(
     Body: CandidateMemory & {
       project?: string;
       sourceEpisodeId?: number;
+      quote?: string;
+      spanStart?: number;
     };
   }>("/api/semantic-memories", async (req) => {
     const project = resolveProject(req.body.project);
-    return store.upsertSemanticMemory(project, req.body, req.body.sourceEpisodeId);
+    const evidence = evidenceFrom(req.body);
+    return store.upsertSemanticMemory(
+      project,
+      req.body,
+      evidence?.sourceEpisodeId,
+      evidence
+    );
   });
 
   app.get<{
@@ -350,6 +388,8 @@ export function registerApiRoutes(
       mode?: "current" | "as_of" | "history" | "all";
       asOf?: string;
       recordedAt?: string;
+      tags?: string[];
+      tagsMatch?: TagMatch;
     };
   }>("/api/retrieve-context", async (req) => {
     const project = resolveProject(req.body.project);
@@ -359,6 +399,7 @@ export function registerApiRoutes(
       mode: req.body.mode,
       asOf: req.body.asOf,
       recordedAt: req.body.recordedAt,
+      tags: parseTagFilter(req.body.tags, req.body.tagsMatch),
     });
   });
 
@@ -421,6 +462,8 @@ export function registerApiRoutes(
     const project = resolveProject(req.body.project);
     return wiki.buildObsidianWiki(store, project, req.body.vaultRoot);
   });
+
+  registerCurationRoutes(app, store);
 
   app.post<{
     Body: { project?: string; topK?: number };

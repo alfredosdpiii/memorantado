@@ -71,6 +71,7 @@ export type Episode = {
   content: string;
   source: string | null;
   metadata: Record<string, unknown> | null;
+  tags: string[];
   createdAt: string;
 };
 
@@ -91,6 +92,8 @@ export type SemanticMemory = {
   lastConfirmedAt: string | null;
   supersedesId: number | null;
   metadata: Record<string, unknown> | null;
+  tags: string[];
+  key: string | null;
   lifecycleStatus: "active" | "archived";
   archiveReason: string | null;
   archivedAt: string | null;
@@ -110,6 +113,35 @@ export type CandidateMemory = {
   validFrom?: string;
   validTo?: string;
   metadata?: Record<string, unknown>;
+  tags?: string[];
+  key?: string;
+};
+
+/** How a tag filter matches an item's tags; untagged items never match. */
+export type TagMatch = "any" | "all" | "exact";
+export type TagFilter = { tags: string[]; match: TagMatch };
+
+/** Evidence quoted from an episode (or a file snapshot) for a memory. */
+export type EvidenceInput = {
+  sourceEpisodeId: number;
+  quote?: string;
+  spanStart?: number;
+};
+
+export type FileSnapshot = {
+  episodeId: number;
+  project: string;
+  source: string;
+  contentHash: string;
+  createdAt: string;
+};
+
+/** A memory whose file evidence no longer matches the file's current content. */
+export type StaleFileEvidence = {
+  memoryId: number;
+  source: string;
+  currentHash: string;
+  evidenceHashes: string[];
 };
 
 export type MemoryConflict = {

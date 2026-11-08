@@ -47,3 +47,11 @@ export async function withTransaction<T>(
 export function toVectorLiteral(vector: number[]): string {
   return `[${vector.join(",")}]`;
 }
+
+/** A `$n` binder over `params`: binds a value and returns its placeholder. */
+export function pgBinder(params: unknown[]) {
+  return (value: string | number) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+}

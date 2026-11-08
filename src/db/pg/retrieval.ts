@@ -2,7 +2,12 @@ import { embedText as embedConfiguredText } from "../../memory/embedding.js";
 import { reciprocalRankFusion } from "../../memory/ranking.js";
 import { renderContext } from "../contextPack.js";
 import { estimateTokens, inferIntent, overlapScore } from "../hybridRows.js";
-import type { ContextPack, RetrievalHit, RetrievalMode } from "../../memory/types.js";
+import type {
+  ContextPack,
+  RetrievalHit,
+  RetrievalMode,
+  TagFilter,
+} from "../../memory/types.js";
 import type { Queryable } from "./client.js";
 import {
   exactEpisodeVectorScan,
@@ -45,16 +50,24 @@ export async function retrieveContextPg(
   const mode: RetrievalMode = opts.mode ?? "current";
   const asOf = opts.asOf ?? null;
   const recordedAt = opts.recordedAt ?? null;
+  const tags = opts.tags;
   const memories = (
-    await collectMemoryHits(db, project, query, limit * 3, { mode, asOf, recordedAt })
+    await collectMemoryHits(db, project, query, limit * 3, {
+      mode,
+      asOf,
+      recordedAt,
+      tags,
+    })
   )
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-  const episodes = (await collectEpisodeHits(db, project, query, limit * 2))
+  const episodes = (await collectEpisodeHits(db, project, query, limit * 2, tags))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
   const conflicts = await listOpenConflictsForHits(db, project, memories);
-  const graph = await searchNodesPg(db, project, query);
+  const graph = tags
+    ? { entities: [], relations: [] }
+    : await searchNodesPg(db, project, query);
   const context = renderContext(memories, episodes, conflicts, graph, tokenBudget);
   const pack: ContextPack = {
     query,
@@ -87,11 +100,20 @@ async function collectMemoryHits(
   }
   const queryEmbedding = await embedConfiguredText(query);
   const words = ftsWords(query);
-  const bm25 = words.length ? await searchMemoryFts(db, project, words, limit * 4) : [];
+  const tags = temporal.tags;
+  const bm25 = words.length
+    ? await searchMemoryFts(db, project, words, limit * 4, tags)
+    : [];
   const vector =
     queryEmbedding.provider === "local-hash"
-      ? await knnMemoryIds(db, project, queryEmbedding.vector, Math.max(limit * 4, 64))
-      : await exactMemoryVectorScan(db, project, queryEmbedding);
+      ? await knnMemoryIds(
+          db,
+          project,
+          queryEmbedding.vector,
+          Math.max(limit * 4, 64),
+          tags
+        )
+      : await exactMemoryVectorScan(db, project, queryEmbedding, tags);
   // Candidates are the bounded union of the bm25 and vector channels. The
   // overlap and prior channels are computed over those candidates instead of
   // scanning the whole project; this is semantics-preserving because any row
@@ -206,15 +228,24 @@ async function collectEpisodeHits(
   db: Queryable,
   project: string,
   query: string,
-  limit: number
+  limit: number,
+  tags?: TagFilter
 ): Promise<RetrievalHit[]> {
   const queryEmbedding = await embedConfiguredText(query);
   const words = ftsWords(query);
-  const bm25 = words.length ? await searchEpisodeFts(db, project, words, limit * 4) : [];
+  const bm25 = words.length
+    ? await searchEpisodeFts(db, project, words, limit * 4, tags)
+    : [];
   const vector =
     queryEmbedding.provider === "local-hash"
-      ? await knnEpisodeIds(db, project, queryEmbedding.vector, Math.max(limit * 4, 64))
-      : await exactEpisodeVectorScan(db, project, queryEmbedding);
+      ? await knnEpisodeIds(
+          db,
+          project,
+          queryEmbedding.vector,
+          Math.max(limit * 4, 64),
+          tags
+        )
+      : await exactEpisodeVectorScan(db, project, queryEmbedding, tags);
   const candidateIds = new Set<number>([
     ...bm25.map((entry) => entry.id),
     ...vector.map((entry) => entry.id),
