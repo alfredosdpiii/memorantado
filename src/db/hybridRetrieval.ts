@@ -125,6 +125,16 @@ export function getMemorySources(db: Database.Database, memoryId: number): Episo
       .all(memoryId) as EpisodeRow[]
   ).map(mapEpisode);
 }
+/** The query's vector; when the configured provider is down, the local one, so the lexical channels still answer. */
+async function embedQuery(
+  query: string
+): Promise<{ provider: string; vector: number[] }> {
+  try {
+    return await embedConfiguredText(query);
+  } catch {
+    return { provider: "local-hash", vector: embedLocalText(query) };
+  }
+}
 async function collectMemoryHits(
   db: Database.Database,
   project: string,
@@ -135,7 +145,7 @@ async function collectMemoryHits(
   if (temporal.mode !== "current") {
     return collectVersionHits(db, project, query, limit, temporal);
   }
-  const queryEmbedding = await embedConfiguredText(query);
+  const queryEmbedding = await embedQuery(query);
   const memories = listActiveMemories(db, project, MAX_RETRIEVAL_SCAN, temporal.tags);
   const byId = new Map(memories.map((memory) => [memory.id, memory]));
   const bm25 = searchMemoryFts(db, project, query, limit * 4, temporal.tags);
@@ -365,7 +375,7 @@ async function collectEpisodeHits(
   limit: number,
   tags?: TagFilter
 ): Promise<RetrievalHit[]> {
-  const queryEmbedding = await embedConfiguredText(query);
+  const queryEmbedding = await embedQuery(query);
   const episodes = listRecentEpisodes(db, project, MAX_RETRIEVAL_SCAN, tags);
   const byId = new Map(episodes.map((episode) => [episode.id, episode]));
   const bm25 = searchEpisodeFts(db, project, query, limit * 4, tags);

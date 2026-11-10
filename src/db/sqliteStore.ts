@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { openDb } from "./db.js";
 import { migrate } from "./migrate.js";
 import * as exchange from "./exchange.js";
+import { upsertConfiguredEmbedding } from "./embeddingStore.js";
 import * as graph from "./graph.js";
 import * as hybrid from "./hybridMemory.js";
 import * as curation from "./memoryCuration.js";
@@ -94,8 +95,11 @@ export class SqliteStore implements MemoryStore {
     timeline.listMemoryItems(this.db, project, opts);
   getProjects: Method<"getProjects"> = async () => timeline.getProjects(this.db);
 
-  appendEpisode: Method<"appendEpisode"> = async (project, input) =>
-    hybrid.appendEpisode(this.db, project, input);
+  appendEpisode: Method<"appendEpisode"> = async (project, input) => {
+    const episode = hybrid.appendEpisode(this.db, project, input);
+    await upsertConfiguredEmbedding(this.db, "episode", episode.id, episode.content);
+    return episode;
+  };
   getEpisode: Method<"getEpisode"> = async (project, id) =>
     hybrid.getEpisode(this.db, project, id);
   listEpisodes: Method<"listEpisodes"> = async (project, opts) =>
@@ -105,9 +109,15 @@ export class SqliteStore implements MemoryStore {
     input,
     sourceEpisodeId,
     evidence
-  ) => hybrid.upsertSemanticMemory(this.db, project, input, sourceEpisodeId, evidence);
-  extractMemories: Method<"extractMemories"> = async (project, episodeId) =>
-    hybrid.extractMemories(this.db, project, episodeId);
+  ) =>
+    this.embedded(
+      hybrid.upsertSemanticMemory(this.db, project, input, sourceEpisodeId, evidence)
+    );
+  extractMemories: Method<"extractMemories"> = async (project, episodeId) => {
+    const memories = await hybrid.extractMemories(this.db, project, episodeId);
+    for (const memory of memories) await this.embedded(memory);
+    return memories;
+  };
   listSemanticMemories: Method<"listSemanticMemories"> = async (project, opts) =>
     curation.listSemanticMemories(this.db, project, opts);
   getSemanticMemory: Method<"getSemanticMemory"> = async (project, memoryId) =>
@@ -119,7 +129,17 @@ export class SqliteStore implements MemoryStore {
     memoryId,
     input,
     evidence
-  ) => hybrid.supersedeMemory(this.db, project, memoryId, input, evidence);
+  ) => {
+    const memory = hybrid.supersedeMemory(this.db, project, memoryId, input, evidence);
+    return memory && this.embedded(memory);
+  };
+
+  private async embedded<T extends { id: number; content: string }>(
+    memory: T
+  ): Promise<T> {
+    await upsertConfiguredEmbedding(this.db, "memory", memory.id, memory.content);
+    return memory;
+  }
   confirmMemory: Method<"confirmMemory"> = async (project, memoryId, evidence) =>
     curation.confirmMemory(this.db, project, memoryId, evidence);
   invalidateMemory: Method<"invalidateMemory"> = async (project, memoryId, reason) =>
