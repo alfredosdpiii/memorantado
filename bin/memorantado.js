@@ -64,8 +64,16 @@ if (command === "--help" || command === "-h" || command === "help") {
       );
     } else if (command === "wiki") {
       const vaultRoot = process.argv[4] || path.join(os.homedir(), "Documents", "wiki");
-      const { buildObsidianWiki } = await import("../dist/wiki/obsidian.js");
-      console.log(JSON.stringify(buildObsidianWiki(db, project, vaultRoot)));
+      const [{ buildObsidianWiki }, { openStore }] = await Promise.all([
+        import("../dist/wiki/obsidian.js"),
+        import("../dist/db/store.js"),
+      ]);
+      const store = await openStore();
+      try {
+        console.log(JSON.stringify(await buildObsidianWiki(store, project, vaultRoot)));
+      } finally {
+        await store.close();
+      }
     } else {
       const { backfillConfiguredEmbeddings } =
         await import("../dist/memory/embeddingBackfill.js");
