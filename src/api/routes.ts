@@ -390,6 +390,8 @@ export function registerApiRoutes(
       recordedAt?: string;
       tags?: string[];
       tagsMatch?: TagMatch;
+      filePaths?: string[];
+      includeEpisodes?: boolean;
     };
   }>("/api/retrieve-context", async (req) => {
     const project = resolveProject(req.body.project);
@@ -400,6 +402,8 @@ export function registerApiRoutes(
       asOf: req.body.asOf,
       recordedAt: req.body.recordedAt,
       tags: parseTagFilter(req.body.tags, req.body.tagsMatch),
+      filePaths: req.body.filePaths,
+      includeEpisodes: req.body.includeEpisodes,
     });
   });
 

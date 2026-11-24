@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "memorantado REST API",
-    "version": "0.4.0",
+    "version": "0.4.1",
     "description": "Local REST API used by the memorantado web UI and by agent clients (scoped recall, curation, file evidence). Invalid input answers 400 {error: \"invalid_input\"}; a change the target's state forbids answers 409 {error: \"conflict\"}; a missing target answers 404 {error: \"not_found\"}."
   },
   "servers": [

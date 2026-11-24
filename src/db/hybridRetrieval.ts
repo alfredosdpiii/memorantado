@@ -33,6 +33,7 @@ import {
   mapConflict,
   mapEpisode,
   overlapScore,
+  pathGlobMatchScore,
   type ClaimVersionRow,
   type EpisodeRow,
   type MemoryConflictRow,
@@ -45,6 +46,10 @@ export type RetrievalOptions = {
   recordedAt?: string;
   /** Scope: only memories and episodes whose tags match; the graph is skipped. */
   tags?: TagFilter;
+  /** Optional touched file paths matched against memory metadata `pathGlobs` / `path_globs`. */
+  filePaths?: string[];
+  /** Whether to include session episodes in retrieval (default: true). */
+  includeEpisodes?: boolean;
 };
 
 const EPISODE_COLUMNS = episodeColumns("sqlite", "e");
@@ -54,6 +59,7 @@ type Temporal = {
   asOf: string | null;
   recordedAt: string | null;
   tags?: TagFilter;
+  filePaths?: string[];
 };
 
 const DEFAULT_LIMIT = 8;
@@ -78,13 +84,17 @@ export async function retrieveContext(
       asOf,
       recordedAt,
       tags: opts.tags,
+      filePaths: opts.filePaths,
     })
   )
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-  const episodes = (await collectEpisodeHits(db, project, query, limit * 2, opts.tags))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+  const episodes =
+    opts.includeEpisodes === false
+      ? []
+      : (await collectEpisodeHits(db, project, query, limit * 2, opts.tags))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
   const conflicts = listOpenConflictsForHits(db, project, memories);
   const graph = opts.tags
     ? { entities: [], relations: [] }
@@ -169,10 +179,20 @@ async function collectMemoryHits(
     .map((memory) => ({ id: memory.id, score: overlapScore(query, memory.content) }))
     .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score || left.id - right.id);
+  const pathMatch = temporal.filePaths?.length
+    ? memories
+        .map((memory) => ({
+          id: memory.id,
+          score: pathGlobMatchScore(memory.metadata, temporal.filePaths),
+        }))
+        .filter((entry) => entry.score > 0)
+        .sort((left, right) => right.score - left.score || left.id - right.id)
+    : [];
   const candidateIds = new Set([
     ...bm25.map((entry) => entry.id),
     ...vector.map((entry) => entry.id),
     ...overlap.map((entry) => entry.id),
+    ...pathMatch.map((entry) => entry.id),
   ]);
   if (!candidateIds.size) return [];
   const prior = memories
@@ -183,12 +203,16 @@ async function collectMemoryHits(
         right.updatedAt.localeCompare(left.updatedAt) ||
         left.id - right.id
     );
-  return reciprocalRankFusion([
+  const channels = [
     { name: "bm25", ids: bm25.map((entry) => entry.id) },
     { name: "vector", ids: vector.map((entry) => entry.id) },
     { name: "overlap", ids: overlap.map((entry) => entry.id) },
     { name: "prior", ids: prior.map((memory) => memory.id) },
-  ])
+  ];
+  if (pathMatch.length) {
+    channels.push({ name: "path", ids: pathMatch.map((entry) => entry.id) });
+  }
+  return reciprocalRankFusion(channels)
     .slice(0, limit)
     .flatMap((fused) => {
       const memory = byId.get(fused.id);

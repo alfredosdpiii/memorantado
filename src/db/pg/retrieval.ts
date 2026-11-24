@@ -1,7 +1,12 @@
 import { embedText as embedConfiguredText } from "../../memory/embedding.js";
 import { reciprocalRankFusion } from "../../memory/ranking.js";
 import { renderContext } from "../contextPack.js";
-import { estimateTokens, inferIntent, overlapScore } from "../hybridRows.js";
+import {
+  estimateTokens,
+  inferIntent,
+  overlapScore,
+  pathGlobMatchScore,
+} from "../hybridRows.js";
 import type {
   ContextPack,
   RetrievalHit,
@@ -52,18 +57,28 @@ export async function retrieveContextPg(
   const recordedAt = opts.recordedAt ?? null;
   const tags = opts.tags;
   const memories = (
-    await collectMemoryHits(db, project, query, limit * 3, {
-      mode,
-      asOf,
-      recordedAt,
-      tags,
-    })
+    await collectMemoryHits(
+      db,
+      project,
+      query,
+      limit * 3,
+      {
+        mode,
+        asOf,
+        recordedAt,
+        tags,
+      },
+      opts.filePaths
+    )
   )
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-  const episodes = (await collectEpisodeHits(db, project, query, limit * 2, tags))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+  const episodes =
+    opts.includeEpisodes === false
+      ? []
+      : (await collectEpisodeHits(db, project, query, limit * 2, tags))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
   const conflicts = await listOpenConflictsForHits(db, project, memories);
   const graph = tags
     ? { entities: [], relations: [] }
@@ -93,7 +108,8 @@ async function collectMemoryHits(
   project: string,
   query: string,
   limit: number,
-  temporal: PgTemporalFilter
+  temporal: PgTemporalFilter,
+  filePaths?: string[]
 ): Promise<RetrievalHit[]> {
   if (temporal.mode !== "current") {
     return collectVersionHits(db, project, query, limit, temporal);
@@ -136,12 +152,25 @@ async function collectMemoryHits(
       right.updatedAt.localeCompare(left.updatedAt) ||
       left.id - right.id
   );
-  const fused = reciprocalRankFusion([
+  const pathMatch = filePaths?.length
+    ? memories
+        .map((memory) => ({
+          id: memory.id,
+          score: pathGlobMatchScore(memory.metadata, filePaths),
+        }))
+        .filter((entry) => entry.score > 0)
+        .sort((left, right) => right.score - left.score || left.id - right.id)
+    : [];
+  const channels = [
     { name: "bm25", ids: bm25.map((entry) => entry.id) },
     { name: "vector", ids: vector.map((entry) => entry.id) },
     { name: "overlap", ids: overlap.map((entry) => entry.id) },
     { name: "prior", ids: prior.map((memory) => memory.id) },
-  ]).slice(0, limit);
+  ];
+  if (pathMatch.length) {
+    channels.push({ name: "path", ids: pathMatch.map((entry) => entry.id) });
+  }
+  const fused = reciprocalRankFusion(channels).slice(0, limit);
   // Sequential on purpose: all queries share one connection (and one
   // transaction) inside retrieveContext; concurrent queries on a single pg
   // client are deprecated.

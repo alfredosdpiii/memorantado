@@ -377,4 +377,26 @@ describe("scoped memory", () => {
       ])
     ).toHaveLength(1);
   });
+
+  it("matches pathGlobs via filePaths and omits episodes when includeEpisodes is false", async () => {
+    const db = await store();
+    await db.appendEpisode("u", {
+      content: "We discussed authentication retries earlier.",
+      tags: [PROJECT],
+    });
+    const globbed = await db.upsertSemanticMemory("u", {
+      kind: "pitfall",
+      subject: "boto3-async",
+      content: "Offload synchronous SDK calls with asyncio.to_thread.",
+      tags: [PROJECT],
+      metadata: { pathGlobs: ["src/auth/**/*.py"] },
+    });
+    const pack = await db.retrieveContext("u", "unrelated query terms", {
+      tags: { tags: [PROJECT], match: "exact" },
+      filePaths: ["src/auth/api_key_store.py"],
+      includeEpisodes: false,
+    });
+    expect(pack.memories.map((hit) => hit.id)).toContain(globbed.id);
+    expect(pack.episodes).toEqual([]);
+  });
 });

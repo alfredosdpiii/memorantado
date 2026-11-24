@@ -279,6 +279,57 @@ export function overlapScore(query: string, text: string): number {
   return matches / queryWords.size;
 }
 
+function normalizePath(value: string): string {
+  return value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function globToRegExp(pattern: string): RegExp {
+  const normalized = normalizePath(pattern);
+  let out = "^";
+  for (let i = 0; i < normalized.length; i += 1) {
+    const ch = normalized[i];
+    if (ch === "*" && normalized[i + 1] === "*") {
+      if (normalized[i + 2] === "/") {
+        out += "(?:.*/)?";
+        i += 2;
+      } else {
+        out += ".*";
+        i += 1;
+      }
+    } else if (ch === "*") {
+      out += "[^/]*";
+    } else if (ch === "?") {
+      out += "[^/]";
+    } else if (/[.+^${}()|[\]\\]/.test(ch)) {
+      out += `\\${ch}`;
+    } else {
+      out += ch;
+    }
+  }
+  return new RegExp(`${out}$`);
+}
+
+export function pathGlobMatchScore(
+  metadata: Record<string, unknown> | null | undefined,
+  filePaths?: string[]
+): number {
+  if (!metadata || !filePaths?.length) return 0;
+  const raw = metadata.pathGlobs ?? metadata.path_globs;
+  if (!Array.isArray(raw) || !raw.length) return 0;
+  const globs = raw
+    .filter(
+      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
+    )
+    .map(globToRegExp);
+  if (!globs.length) return 0;
+  let matches = 0;
+  for (const rawPath of filePaths) {
+    const path = normalizePath(rawPath);
+    if (path && globs.some((rx) => rx.test(path))) matches += 1;
+  }
+  return matches;
+}
+
 export function significantWords(text: string): string[] {
   return (text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((word) => word.length > 2);
 }
